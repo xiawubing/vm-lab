@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vm-ssh": {
+      "command": "/opt/venv/bin/python",
+      "args": ["/app/mcp_ssh_server.py"]
+    }
+  }
+}

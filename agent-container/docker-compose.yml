@@ -1,0 +1,12 @@
+services:
+  agent:
+    build: .
+    environment:
+      - ANTHROPIC_API_KEY
+      - VM_SSH_HOST=host.docker.internal
+      - VM_SSH_PORT=2226
+      - VM_SSH_USER=ubuntu
+      - VM_SSH_PASSWORD=ubuntu
+      - VM_CONTROLLER_URL=http://host.docker.internal:8222
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

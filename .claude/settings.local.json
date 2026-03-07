@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wget:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(npm search:*)",
+      "Bash(python3:*)",
+      "WebFetch(domain:gofastmcp.com)"
+    ]
+  }
+}
