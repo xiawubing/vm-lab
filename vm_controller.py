@@ -2,10 +2,10 @@
 """VM Controller — lightweight HTTP service for managing QEMU VMs.
 
 Runs on the host. Allows the Docker-based MCP server to start/stop/restart
-VMs via HTTP requests.
+VMs via HTTP requests. Reads CVE configuration from cve-registry.json.
 
 Usage:
-    python3 vm_controller.py [--port 8222] [--vm-dir /home/xia/vm-lab]
+    python3 vm_controller.py --cve CVE-2017-6074 [--port 8222] [--vm-dir /home/xia/vm-lab]
 
 Endpoints:
     GET  /status          — Check if QEMU process is running
@@ -26,11 +26,13 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 import threading
 
-# Configurable
+# Configurable — set from registry via --cve
 VM_DIR = Path.home() / "vm-lab"
-VM_SCRIPT = "start_vm_CVE-2017-6074.sh"
+VM_SCRIPT = ""
 QEMU_PROCESS_NAME = "qemu-system-x86_64"
-SSH_PORT = 2226  # used to identify the specific VM
+SSH_PORT = 0
+SSH_USER = "ubuntu"
+SSH_PASSWORD = "ubuntu"
 
 # Track the VM process we started
 _vm_proc: subprocess.Popen | None = None
@@ -144,11 +146,12 @@ def _wait_for_ssh(timeout: int = 180) -> str:
     while time.time() - start < timeout:
         try:
             result = subprocess.run(
-                ["sshpass", "-p", "ubuntu", "ssh",
+                ["sshpass", "-p", SSH_PASSWORD, "ssh",
                  "-o", "StrictHostKeyChecking=no",
+                 "-o", "UserKnownHostsFile=/dev/null",
                  "-o", "ConnectTimeout=3",
                  "-p", str(SSH_PORT),
-                 "ubuntu@127.0.0.1", "uname -r"],
+                 f"{SSH_USER}@127.0.0.1", "uname -r"],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode == 0:
@@ -218,19 +221,42 @@ class VMHandler(BaseHTTPRequestHandler):
         print(f"[vm-controller] {args[0]}")
 
 
+def _load_cve_config(cve_id: str, vm_dir: Path):
+    """Load CVE configuration from registry."""
+    global VM_SCRIPT, SSH_PORT, SSH_USER, SSH_PASSWORD
+    registry_path = vm_dir / "cve-registry.json"
+    if not registry_path.exists():
+        print(f"[vm-controller] ERROR: Registry not found: {registry_path}")
+        sys.exit(1)
+    with open(registry_path) as f:
+        registry = json.load(f)
+    if cve_id not in registry:
+        print(f"[vm-controller] ERROR: Unknown CVE: {cve_id}")
+        print(f"[vm-controller] Available: {', '.join(registry.keys())}")
+        sys.exit(1)
+    cfg = registry[cve_id]
+    VM_SCRIPT = cfg["script"]
+    SSH_PORT = cfg["ssh_port"]
+    SSH_USER = cfg["ssh_user"]
+    SSH_PASSWORD = cfg["ssh_password"]
+
+
 def main():
     global VM_DIR
     parser = argparse.ArgumentParser(description="VM Controller HTTP Service")
+    parser.add_argument("--cve", type=str, required=True, help="CVE ID (e.g. CVE-2017-6074)")
     parser.add_argument("--port", type=int, default=8222)
     parser.add_argument("--vm-dir", type=str, default=str(VM_DIR))
     args = parser.parse_args()
 
     VM_DIR = Path(args.vm_dir)
+    _load_cve_config(args.cve, VM_DIR)
 
     server = HTTPServer(("0.0.0.0", args.port), VMHandler)
+    print(f"[vm-controller] CVE: {args.cve}")
     print(f"[vm-controller] Listening on port {args.port}")
     print(f"[vm-controller] VM dir: {VM_DIR}")
-    print(f"[vm-controller] VM script: {VM_SCRIPT}")
+    print(f"[vm-controller] VM script: {VM_SCRIPT} (SSH port {SSH_PORT}, user {SSH_USER})")
     print(f"[vm-controller] Endpoints: GET /status, POST /start, POST /stop, POST /restart, GET /log")
 
     try:

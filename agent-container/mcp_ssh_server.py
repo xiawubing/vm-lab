@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""MCP SSH Server for CVE-2017-6074 exploit development.
+"""MCP SSH Server for CVE exploit development.
 
 Provides tools for Claude Code to interact with a QEMU VM running
-a vulnerable kernel via SSH/SFTP, and to compile exploit code locally
-with static linking before uploading to the VM.
+a vulnerable kernel/userspace via SSH/SFTP, and to compile exploit code
+on the VM.
 """
 
 import os
@@ -67,9 +67,10 @@ def _get_ssh() -> paramiko.SSHClient:
 
 def _ssh_error_message(e: Exception) -> str:
     """Return a clear error message when the VM is unreachable."""
+    cve_id = os.environ.get("CVE_ID", "unknown")
     return (
-        f"VM likely crashed or unreachable. It may need to be restarted "
-        f"from the host with: ./start_vm_CVE-2017-6074.sh\n"
+        f"VM likely crashed or unreachable. Use vm_restart() to bring it back, "
+        f"or restart from the host for {cve_id}.\n"
         f"SSH error: {type(e).__name__}: {e}"
     )
 

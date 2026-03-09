@@ -32,11 +32,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Claude Code
 RUN npm install -g @anthropic-ai/claude-code
 
-# Download and extract kernel source (mainline 4.4.62)
-RUN mkdir -p /src && \
-    wget -q https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.4.62.tar.xz -O /tmp/linux-4.4.62.tar.xz && \
-    tar -xf /tmp/linux-4.4.62.tar.xz -C /src/ && \
-    rm /tmp/linux-4.4.62.tar.xz
+# Download and extract kernel source (conditional on build arg)
+ARG KERNEL_SOURCE_URL=""
+ARG KERNEL_SOURCE_DIR=""
+RUN if [ -n "$KERNEL_SOURCE_URL" ]; then \
+        mkdir -p /src && \
+        wget -q "$KERNEL_SOURCE_URL" -O /tmp/kernel-source.tar.xz && \
+        tar -xf /tmp/kernel-source.tar.xz -C /src/ && \
+        rm /tmp/kernel-source.tar.xz && \
+        echo "Kernel source installed: /src/$KERNEL_SOURCE_DIR"; \
+    else \
+        mkdir -p /src && \
+        echo "No kernel source requested"; \
+    fi
 
 # Python venv with MCP dependencies
 RUN python3 -m venv /opt/venv
