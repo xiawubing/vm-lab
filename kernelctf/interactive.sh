@@ -1,0 +1,229 @@
+#!/bin/bash
+# Interactive kernelCTF VM launcher with SSH access.
+#
+# Boots a kernelCTF kernel in QEMU with a writable rootfs overlay,
+# SSH port forwarding, and exploit source files mounted via 9p.
+#
+# Usage:
+#   ./interactive.sh <cve-or-release> [options]
+#
+# Options:
+#   --port PORT    SSH port on host (default: 2250)
+#   --reset        Delete existing overlay and start fresh
+#   --list         List available CVEs with their releases
+#   --no-exploit   Don't copy exploit source
+#   --nokaslr      Disable KASLR for easier debugging
+#
+# Examples:
+#   ./interactive.sh CVE-2023-0461_mitigation
+#   ./interactive.sh mitigation-6.1-v2 --port 2251
+#   ./interactive.sh CVE-2023-0461_mitigation --nokaslr --reset
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+KERNELCTF_POCS="/home/xia/security-research/pocs/linux/kernelctf"
+DEFAULT_PORT=2250
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
+info()  { echo -e "${CYAN}[*]${NC} $*"; }
+ok()    { echo -e "${GREEN}[+]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+err()   { echo -e "${RED}[-]${NC} $*"; }
+
+usage() {
+    echo "Usage: $0 <cve-or-release> [options]"
+    echo ""
+    echo "  <cve-or-release>   CVE directory name or kernelCTF release name"
+    echo ""
+    echo "Options:"
+    echo "  --port PORT    SSH port on host (default: $DEFAULT_PORT)"
+    echo "  --reset        Delete overlay, start fresh"
+    echo "  --list         List available CVEs"
+    echo "  --no-exploit   Don't copy exploit source"
+    echo "  --nokaslr      Disable KASLR"
+    echo ""
+    echo "Examples:"
+    echo "  $0 CVE-2023-0461_mitigation"
+    echo "  $0 mitigation-6.1-v2 --port 2251"
+    exit 0
+}
+
+list_cves() {
+    echo "Available kernelCTF CVEs:"
+    echo ""
+    if [ -d "$KERNELCTF_POCS" ]; then
+        for d in "$KERNELCTF_POCS"/CVE-*/; do
+            [ -d "$d" ] || continue
+            cve=$(basename "$d")
+            releases=$(ls "$d/exploit/" 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+            if [ -n "$releases" ]; then
+                printf "  %-45s %s\n" "$cve" "$releases"
+            fi
+        done
+    else
+        err "security-research repo not found: $KERNELCTF_POCS"
+    fi
+    exit 0
+}
+
+# --- Parse arguments ---
+
+TARGET=""
+SSH_PORT="$DEFAULT_PORT"
+RESET=false
+NO_EXPLOIT=false
+NOKASLR=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --port)      SSH_PORT="$2"; shift 2 ;;
+        --reset)     RESET=true; shift ;;
+        --list|-l)   list_cves ;;
+        --no-exploit) NO_EXPLOIT=true; shift ;;
+        --nokaslr)   NOKASLR=true; shift ;;
+        --help|-h)   usage ;;
+        *)           TARGET="$1"; shift ;;
+    esac
+done
+
+if [ -z "$TARGET" ]; then usage; fi
+
+# --- Resolve target → release name ---
+
+CVE_DIR=""
+RELEASE=""
+EXPLOIT_SRC=""
+
+if [[ "$TARGET" == CVE-* ]]; then
+    CVE_DIR="$TARGET"
+    CVE_PATH="$KERNELCTF_POCS/$CVE_DIR"
+
+    if [ ! -d "$CVE_PATH" ]; then
+        err "CVE directory not found: $CVE_PATH"
+        exit 1
+    fi
+
+    RELEASE_RAW=$(ls "$CVE_PATH/exploit/" 2>/dev/null | head -1)
+    if [ -z "$RELEASE_RAW" ]; then
+        err "No exploit subdirectory found in $CVE_PATH/exploit/"
+        exit 1
+    fi
+
+    RELEASE="$RELEASE_RAW"
+    # Map known release aliases
+    [[ "$RELEASE" == "mitigation-6.1" ]] && RELEASE="mitigation-6.1-v2"
+
+    EXPLOIT_SRC="$CVE_PATH/exploit/$RELEASE_RAW"
+    info "CVE: $CVE_DIR -> release: $RELEASE"
+else
+    RELEASE="$TARGET"
+fi
+
+# --- Paths ---
+
+RELEASE_DIR="$SCRIPT_DIR/releases/$RELEASE"
+BZIMAGE="$RELEASE_DIR/bzImage"
+ROOTFS="$SCRIPT_DIR/images/rootfs_repro_v2.img"
+RAMDISK="$SCRIPT_DIR/images/ramdisk_v1.img"
+OVERLAY_DIR="$SCRIPT_DIR/images"
+OVERLAY="$OVERLAY_DIR/${RELEASE}-interactive.qcow2"
+
+# --- Pre-flight checks ---
+
+if [ ! -f "$BZIMAGE" ]; then
+    info "bzImage not found for $RELEASE, downloading..."
+    "$SCRIPT_DIR/setup.sh" "$RELEASE"
+fi
+
+if [ ! -f "$BZIMAGE" ]; then
+    err "bzImage still not found: $BZIMAGE"
+    exit 1
+fi
+
+if [ ! -f "$ROOTFS" ]; then
+    err "rootfs_repro_v2.img not found. Run: ./setup.sh"
+    exit 1
+fi
+
+if [ ! -f "$RAMDISK" ]; then
+    err "ramdisk_v1.img not found. Run: ./setup.sh"
+    exit 1
+fi
+
+# --- Create qcow2 overlay (writable, backed by rootfs) ---
+
+mkdir -p "$OVERLAY_DIR"
+
+if $RESET && [ -f "$OVERLAY" ]; then
+    info "Removing existing overlay..."
+    rm -f "$OVERLAY"
+fi
+
+if [ ! -f "$OVERLAY" ]; then
+    info "Creating qcow2 overlay (first boot will install SSH, ~30s)..."
+    qemu-img create -f qcow2 -b "$ROOTFS" -F raw "$OVERLAY" 2>/dev/null
+    ok "Overlay: $OVERLAY"
+fi
+
+# --- Prepare exploit source ---
+
+EXP_DIR="$SCRIPT_DIR/exp-interactive"
+mkdir -p "$EXP_DIR"
+
+if ! $NO_EXPLOIT && [ -n "$EXPLOIT_SRC" ] && [ -d "$EXPLOIT_SRC" ]; then
+    rm -f "$EXP_DIR"/*
+    cp "$EXPLOIT_SRC"/* "$EXP_DIR/" 2>/dev/null || true
+    ok "Exploit source copied from $(basename "$EXPLOIT_SRC")"
+fi
+
+# --- Kernel command line ---
+
+CMDLINE="console=ttyS0 root=/dev/vda1 rootfstype=ext4 rw"
+CMDLINE="$CMDLINE sysctl.io_uring_disabled=2 hostname=$RELEASE"
+
+# Hardening for mitigation instances
+if [[ "$RELEASE" == mitigation-* ]]; then
+    CMDLINE="$CMDLINE sysctl.kernel.dmesg_restrict=1 sysctl.kernel.kptr_restrict=2"
+    CMDLINE="$CMDLINE sysctl.kernel.unprivileged_bpf_disabled=2 sysctl.net.core.bpf_jit_harden=1"
+    CMDLINE="$CMDLINE sysctl.kernel.yama.ptrace_scope=1 slab_virtual=1 slab_virtual_guards=1"
+fi
+
+if $NOKASLR; then
+    CMDLINE="$CMDLINE nokaslr"
+    info "KASLR disabled"
+fi
+
+# init=/init triggers rootfs's /init which mounts 9p 'init' tag and runs init.sh
+CMDLINE="$CMDLINE init=/init"
+
+# --- Print connection info ---
+
+echo ""
+echo "=============================================="
+echo -e "  Kernel:   ${GREEN}$RELEASE${NC}"
+[ -n "$CVE_DIR" ] && echo -e "  CVE:      ${GREEN}$CVE_DIR${NC}"
+echo -e "  SSH:      ${GREEN}ssh -p $SSH_PORT user@127.0.0.1${NC}"
+echo -e "  Creds:    user / user  |  root / root"
+echo -e "  Exploit:  /home/user/exploit/"
+echo -e "  Reset:    $0 $TARGET --reset"
+echo -e "  Exit VM:  Ctrl+A then X"
+echo "=============================================="
+echo ""
+
+# --- Launch QEMU ---
+
+exec qemu-system-x86_64 \
+    -m 3.5G \
+    -nographic \
+    -no-reboot \
+    -enable-kvm \
+    -cpu host,-avx512f \
+    -smp cores=2 \
+    -kernel "$BZIMAGE" \
+    -initrd "$RAMDISK" \
+    -drive "file=$OVERLAY,if=virtio,format=qcow2,discard=unmap" \
+    -nic "user,model=virtio-net-pci,hostfwd=tcp::${SSH_PORT}-:22" \
+    -virtfs "local,path=$SCRIPT_DIR/init-interactive,mount_tag=init,security_model=none,readonly=on" \
+    -virtfs "local,path=$EXP_DIR,mount_tag=exp,security_model=none" \
+    -append "$CMDLINE"
