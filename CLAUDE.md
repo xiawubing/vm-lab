@@ -17,8 +17,6 @@ vm-lab/
 ├── vm_controller.py          # HTTP REST service for VM lifecycle management (port 8222)
 ├── boot-vulnerable-vm.sh     # Standalone boot script (CVE-2018-18955 only)
 ├── cve-registry.json         # Central CVE metadata (ports, credentials, kernels, scripts)
-├── dirtypipe.c               # CVE-2022-0847 PoC source code
-├── linux-4.19.1.tar.xz       # Kernel source tarball (for CVE-2018-18955 / CVE-2022-0847)
 ├── vm-scripts/               # Per-CVE VM launcher scripts
 │   └── start_vm_CVE-*.sh     # Self-contained QEMU boot scripts (9 total)
 ├── cloud-init/               # Per-CVE cloud-init provisioning configs
