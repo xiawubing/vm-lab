@@ -6,8 +6,9 @@ images/
 # Kernel packages (.deb), FAT disk images, source trees, tarballs
 kernel/
 
-# Full kernel source trees
+# Full kernel source trees and tarballs
 linux-*/
+linux-*.tar.xz
 
 # === Generated artifacts (recreated automatically on first run) ===
 
