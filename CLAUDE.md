@@ -33,7 +33,20 @@ vm-lab/
 │   └── cve-info/             # Per-CVE PoC documentation and exploit code
 │       └── CVE-*.md          # Vulnerability details, PoC source, compile flags
 ├── images/                   # (gitignored) Base cloud images + per-CVE qcow2 overlays
-└── kernel/                   # (gitignored) Vulnerable kernel .deb packages
+├── kernel/                   # (gitignored) Vulnerable kernel .deb packages
+└── kernelctf/                # kernelCTF exploit testing infrastructure
+    ├── run.sh                # Compile + run exploit against kernelCTF VM (automated)
+    ├── interactive.sh        # Boot kernelCTF VM with SSH + writable overlay (debug)
+    ├── qemu.sh               # Low-level QEMU launcher (called by run.sh)
+    ├── setup.sh              # Download kernelCTF base images and release bzImages
+    ├── releases/             # Per-release kernel bzImages (e.g. mitigation-6.1-v2/)
+    ├── images/               # rootfs_repro_v2.img, rootfs_v3.img, ramdisk_v1.img, overlays
+    ├── exp/                  # Compiled exploit binary (written by run.sh, read-only 9p mount)
+    ├── exp-interactive/      # Exploit source for interactive mode (writable 9p mount)
+    ├── init/init.sh          # Non-interactive init: mounts exp via 9p, runs exploit as user
+    ├── init-interactive/init.sh  # Interactive init: SSH, networking, shell loop
+    ├── patches/cbq_compat.h  # Compat shim for CBQ netlink structs (applied by run.sh)
+    └── logs/                 # VM output logs and flag files
 ```
 
 ## Architecture
@@ -117,6 +130,68 @@ Central metadata for all CVEs. Each entry contains:
 - `cloud-init/` — per-CVE subdirectories with user-data, meta-data, and seed.iso
 - `agent-container/cve-info/` — per-CVE markdown files with PoC source code, compile flags, and success/failure markers
 
+## kernelCTF infrastructure (`kernelctf/`)
+
+A separate subsystem for testing exploits against official [kernelCTF](https://google.github.io/security-research/kernelctf/rules.html) release kernels. It mirrors the kernelCTF reproduction environment locally.
+
+### Workflow
+
+```
+kernelctf/run.sh CVE-2023-0461_mitigation
+    │
+    ├── Reads exploit source from ~/security-research/pocs/linux/kernelctf/<CVE>/exploit/<release>/
+    ├── Copies + patches source into kernelctf/exp/ (cbq_compat.h, keyutils.h stub, getroot() patch)
+    ├── Compiles: gcc -I. -o exploit exploit.c -O0 -static -s
+    ├── Generates a unique flag: kernelCTF{<uuid>} written to kernelctf/logs/flag
+    ├── Launches kernelctf/qemu.sh (up to 3 retries, 120s timeout each)
+    │       │
+    │       ├── Boots bzImage from kernelctf/releases/<release>/
+    │       ├── Mounts rootfs_repro_v2.img (read-only), ramdisk_v1.img as initrd
+    │       ├── Passes flag file as /dev/vdb (virtio block device)
+    │       ├── Mounts kernelctf/exp/ via 9p (mount_tag=exp, read-only)
+    │       └── Runs kernelctf/init/init.sh as init=
+    │               └── Runs /tmp/exp/exploit as unprivileged user
+    │
+    └── Polls VM output for the flag string → reports SUCCESS or FAILURE
+```
+
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `kernelctf/run.sh <cve-dir> [release]` | Compile, patch, and run exploit; up to 3 retries |
+| `kernelctf/interactive.sh <cve-or-release> [--port PORT] [--reset] [--nokaslr]` | Boot with SSH, writable overlay, exploit source at `/home/user/exploit/` |
+| `kernelctf/qemu.sh <release-dir> <flag-file>` | Raw QEMU launcher (called by run.sh) |
+| `kernelctf/setup.sh [release...] [--deps] [--list]` | Download rootfs/ramdisk/bzImage from `storage.googleapis.com/kernelctf-build` |
+
+### Key design details
+
+- **Source patching**: `run.sh` automatically injects `cbq_compat.h`, a `keyutils.h` syscall stub, and patches `getroot()` to read `/flag` (via `/dev/vdb`) and print it — avoiding interactive bash which would block automated runs.
+- **Mitigation kernel hardening**: when `RELEASE` starts with `mitigation-`, QEMU cmdline adds `dmesg_restrict=1`, `kptr_restrict=2`, `unprivileged_bpf_disabled=2`, `slab_virtual=1`, etc.
+- **Interactive mode overlays**: `interactive.sh` creates a qcow2 overlay backed by `rootfs_repro_v2.img` for a persistent writable session. Delete the overlay (`kernelctf/images/<release>-interactive.qcow2`) to reset.
+- **Exploit source location**: CVE exploit sources live in `~/security-research/pocs/linux/kernelctf/<CVE>/exploit/<release>/` (separate repo, not in vm-lab).
+- **Credentials (interactive)**: `user` / `user` and `root` / `root`; SSH port default 2250.
+
+### Common operations
+
+```bash
+# Run exploit automatically (compile + VM + flag check)
+cd kernelctf && ./run.sh CVE-2023-0461_mitigation
+
+# Download base images + a specific release bzImage
+cd kernelctf && ./setup.sh mitigation-6.1-v2
+
+# Boot interactive VM for manual debugging
+cd kernelctf && ./interactive.sh CVE-2023-0461_mitigation --nokaslr
+ssh -p 2250 user@127.0.0.1
+
+# List available CVEs in security-research repo
+cd kernelctf && ./interactive.sh --list
+
+# Reset interactive overlay to clean state
+rm kernelctf/images/mitigation-6.1-v2-interactive.qcow2
+```
+
 ## CVE inventory
 
 | CVE | Type | Kernel/Version | Base OS | SSH Port |
@@ -191,6 +266,44 @@ rm ~/vm-lab/images/ubuntu-16.04-cve-2017-6074-working.img
 - The MCP server handles auto-retry for semi-reliable kernel exploits — do not manually retry in agent logic
 - The agent runs as non-root user `agent` (UID 1000) since Claude Code refuses to run as root
 - Claude Code is invoked with `claude-sonnet-4-6` model, `--max-budget-usd 5.00`
+
+## Anti-patterns (do NOT do these)
+
+<!-- Add lessons learned here. Every time Claude makes a mistake, add a line so it never happens again. -->
+
+### VM and QEMU
+- Do NOT modify base images directly — always use qcow2 overlays
+- Do NOT hardcode SSH ports — always read from `cve-registry.json`
+- Do NOT use `-kernel` boot for CVEs that need initrd/modules — use GRUB boot instead
+- Do NOT delete a qcow2 overlay while the VM is running — stop the VM first
+- Do NOT assume VMs boot instantly — cloud-init provisioning can take 30+ seconds after SSH becomes available
+
+### Exploit development
+- Do NOT assume x86_64 syscall numbers on i386 kernels — check `unistd_32.h`
+- Do NOT compile exploits with optimization (`-O2`) by default — use `-O0` or flags from the CVE info file to preserve intended behavior
+- Do NOT assume kernel symbols are readable — check `/proc/kallsyms` access (may require root or `kptr_restrict=0`)
+- Do NOT run untested exploit code as root — always test as unprivileged user first, privilege escalation is the exploit's job
+
+### Agent container
+- Do NOT manually retry kernel exploits in agent logic — the MCP `vm_run_exploit` tool handles auto-retry and VM restart on crash
+- Do NOT use `apt` on CentOS VMs — use `yum`
+- Do NOT forget the `agent_` prefix for agent-created files
+
+### Scripts and infrastructure
+- Do NOT download kernel packages inside the VM — deliver them via FAT disk image (`-hdb`)
+- Do NOT create cloud-init configs that require network access — VMs are air-gapped
+- Do NOT reuse SSH ports across CVEs — each CVE gets a unique port from the 222x-223x range
+
+## Debugging notes
+
+<!-- Common issues and their solutions. Add entries as you encounter and solve problems. -->
+
+- **VM hangs at boot**: check cloud-init `user-data` for YAML syntax errors first
+- **SSH connection refused after VM starts**: wait 30s — cloud-init may still be installing kernel packages and rebooting
+- **Exploit compiles but segfaults**: check kernel ASLR/SMEP/SMAP status (`cat /proc/cpuinfo | grep smep`, `cat /proc/sys/kernel/randomize_va_space`) before debugging the code
+- **VM kernel panic on exploit run**: this is expected for some exploits — use `vm_run_exploit` with `max_retries` to auto-restart and retry
+- **`genisoimage` not found**: run `./setup.sh --deps` to install host dependencies
+- **qcow2 overlay corrupted**: delete the overlay file in `images/` and reboot — it will be recreated from the base image
 
 ## Host dependencies
 
