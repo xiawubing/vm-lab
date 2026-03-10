@@ -23,12 +23,13 @@ kernelctf/images/
 # Kernel bzImage binaries
 kernelctf/releases/
 
-# Compiled exploit binaries (rebuild from source)
-kernelctf/exp/exploit
-kernelctf/exp-interactive/exploit
+# Exploit build artifacts (rebuilt by run.sh each invocation)
+kernelctf/exp/
+kernelctf/exp-interactive/
 
-# Runtime logs
+# Runtime logs and diagnostics
 kernelctf/logs/
+kernelctf/setup-failed.log
 
 # === Local Claude Code settings ===
 .claude/settings.local.json
