@@ -29,6 +29,8 @@ import threading
 # Configurable — set from registry via --cve
 VM_DIR = Path.home() / "vm-lab"
 VM_SCRIPT = ""
+BOOT_MODE = "cloud-init"   # "cloud-init" or "kernelctf"
+RELEASE = ""                # kernelCTF release name (e.g. "mitigation-6.1-v2")
 QEMU_PROCESS_NAME = "qemu-system-x86_64"
 SSH_PORT = 0
 SSH_USER = "ubuntu"
@@ -104,7 +106,7 @@ def _stop_vm() -> str:
 
 
 def _start_vm() -> str:
-    """Start the VM by running the start script."""
+    """Start the VM by running the appropriate start script."""
     global _vm_proc, _vm_log
     with _vm_lock:
         # Check if already running
@@ -113,13 +115,23 @@ def _start_vm() -> str:
         if _find_vm_pid() is not None:
             return "VM is already running (found via pgrep)"
 
-        script_path = VM_DIR / VM_SCRIPT
-        if not script_path.exists():
-            return f"VM script not found: {script_path}"
+        if BOOT_MODE == "kernelctf":
+            # kernelCTF mode: use interactive.sh with --no-exploit (agent generates PoC)
+            script_path = VM_DIR / "kernelctf" / "interactive.sh"
+            if not script_path.exists():
+                return f"interactive.sh not found: {script_path}"
+            cmd = ["bash", str(script_path), RELEASE,
+                   "--port", str(SSH_PORT), "--no-exploit"]
+        else:
+            # cloud-init mode: use vm-scripts/
+            script_path = VM_DIR / VM_SCRIPT
+            if not script_path.exists():
+                return f"VM script not found: {script_path}"
+            cmd = ["bash", str(script_path)]
 
         _vm_log = []
         _vm_proc = subprocess.Popen(
-            ["bash", str(script_path)],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             cwd=str(VM_DIR),
@@ -137,7 +149,7 @@ def _start_vm() -> str:
         t = threading.Thread(target=_capture_output, daemon=True)
         t.start()
 
-        return f"VM starting (pid {_vm_proc.pid})"
+        return f"VM starting (pid {_vm_proc.pid}, mode={BOOT_MODE})"
 
 
 def _wait_for_ssh(timeout: int = 180) -> str:
@@ -223,7 +235,7 @@ class VMHandler(BaseHTTPRequestHandler):
 
 def _load_cve_config(cve_id: str, vm_dir: Path):
     """Load CVE configuration from registry."""
-    global VM_SCRIPT, SSH_PORT, SSH_USER, SSH_PASSWORD
+    global VM_SCRIPT, BOOT_MODE, RELEASE, SSH_PORT, SSH_USER, SSH_PASSWORD
     registry_path = vm_dir / "cve-registry.json"
     if not registry_path.exists():
         print(f"[vm-controller] ERROR: Registry not found: {registry_path}")
@@ -232,13 +244,17 @@ def _load_cve_config(cve_id: str, vm_dir: Path):
         registry = json.load(f)
     if cve_id not in registry:
         print(f"[vm-controller] ERROR: Unknown CVE: {cve_id}")
-        print(f"[vm-controller] Available: {', '.join(registry.keys())}")
+        print(f"[vm-controller] Available: {', '.join(sorted(registry.keys()))}")
         sys.exit(1)
     cfg = registry[cve_id]
-    VM_SCRIPT = cfg["script"]
+    BOOT_MODE = cfg.get("boot_mode", "cloud-init")
     SSH_PORT = cfg["ssh_port"]
     SSH_USER = cfg["ssh_user"]
     SSH_PASSWORD = cfg["ssh_password"]
+    if BOOT_MODE == "kernelctf":
+        RELEASE = cfg["release"]
+    else:
+        VM_SCRIPT = cfg["script"]
 
 
 def main():
@@ -256,7 +272,11 @@ def main():
     print(f"[vm-controller] CVE: {args.cve}")
     print(f"[vm-controller] Listening on port {args.port}")
     print(f"[vm-controller] VM dir: {VM_DIR}")
-    print(f"[vm-controller] VM script: {VM_SCRIPT} (SSH port {SSH_PORT}, user {SSH_USER})")
+    print(f"[vm-controller] Boot mode: {BOOT_MODE}")
+    if BOOT_MODE == "kernelctf":
+        print(f"[vm-controller] Release: {RELEASE} (SSH port {SSH_PORT}, user {SSH_USER})")
+    else:
+        print(f"[vm-controller] VM script: {VM_SCRIPT} (SSH port {SSH_PORT}, user {SSH_USER})")
     print(f"[vm-controller] Endpoints: GET /status, POST /start, POST /stop, POST /restart, GET /log")
 
     try:

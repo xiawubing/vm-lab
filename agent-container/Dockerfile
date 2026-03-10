@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc-multilib \
     libc6-dev \
     linux-libc-dev \
+    libkeyutils-dev \
+    libmnl-dev \
+    libnftnl-dev \
     python3 \
     python3-pip \
     python3-venv \
