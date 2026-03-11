@@ -46,6 +46,13 @@ install_deps() {
     dpkg -s libkeyutils-dev &>/dev/null 2>&1 || missing+=("libkeyutils-dev")
     dpkg -s libmnl-dev &>/dev/null 2>&1 || missing+=("libmnl-dev")
     dpkg -s libnftnl-dev &>/dev/null 2>&1 || missing+=("libnftnl-dev")
+    # kernelCTF exploit build dependencies (covers sudo apt-get in 45+ Makefiles)
+    dpkg -s libnl-nf-3-dev &>/dev/null 2>&1 || missing+=("libnl-nf-3-dev")
+    dpkg -s libnl-cli-3-dev &>/dev/null 2>&1 || missing+=("libnl-cli-3-dev")
+    dpkg -s libnl-route-3-dev &>/dev/null 2>&1 || missing+=("libnl-route-3-dev")
+    dpkg -s libip4tc-dev &>/dev/null 2>&1 || missing+=("libip4tc-dev")
+    command -v musl-gcc &>/dev/null || missing+=("musl-tools")
+    command -v nasm &>/dev/null || missing+=("nasm")
 
     local unique=($(echo "${missing[@]}" 2>/dev/null | tr ' ' '\n' | sort -u))
     if [ ${#unique[@]} -eq 0 ]; then

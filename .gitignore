@@ -26,6 +26,10 @@ kernelctf/releases/
 # Exploit build artifacts (rebuilt by run.sh each invocation)
 kernelctf/exp/
 kernelctf/exp-interactive/
+kernelctf/exploit
+
+# Smoke test results (large, machine-generated)
+kernelctf/smoke-results/
 
 # Runtime logs and diagnostics
 kernelctf/logs/

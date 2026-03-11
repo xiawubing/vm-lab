@@ -13,6 +13,7 @@ Usage:
     ./smoke_test.py --list                    # list all testable CVEs
     ./smoke_test.py --timeout 600             # per-CVE timeout (default 480s)
     ./smoke_test.py --stop-on-fail 5          # stop after N failures
+    ./smoke_test.py --skip-outcomes COMPILE_ERROR SKIP  # skip known outcomes on resume
 """
 
 import argparse
@@ -89,14 +90,20 @@ def check_preflight(entry: dict) -> str | None:
 def classify_outcome(exit_code: int, log_content: str, timed_out: bool) -> str:
     """Classify the test outcome based on exit code and log content."""
     if timed_out:
+        # Timeout during compilation (e.g. sudo apt-get blocking) — not a VM timeout
+        if "sudo apt" in log_content and "Launching VM" not in log_content:
+            return COMPILE_ERROR
         return TIMEOUT
     if exit_code == 0:
         return PASS
     # Check for compilation failures
-    if "Compilation failed" in log_content or "Makefile compilation failed" in log_content:
-        return COMPILE_ERROR
     if "No exploit binary available" in log_content:
         return COMPILE_ERROR
+    # If compilation failed but pre-compiled binary was used, classify by runtime result
+    if "Makefile compilation failed" in log_content or "Compilation failed" in log_content:
+        if "Using pre-compiled binary" not in log_content:
+            return COMPILE_ERROR
+        # Fall through — pre-compiled binary was used, classify by runtime
     if exit_code == 1:
         return FAIL
     return ERROR
@@ -147,22 +154,48 @@ def run_single_test(
 
     start = time.monotonic()
     timed_out = False
+    output = ""
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [str(SCRIPT_DIR / "run.sh"), cve_dir, release],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             text=True,
-            timeout=timeout,
             cwd=str(SCRIPT_DIR),
+            preexec_fn=os.setsid,
         )
-        exit_code = proc.returncode
-        output = proc.stdout + proc.stderr
-    except subprocess.TimeoutExpired as e:
-        timed_out = True
-        exit_code = -1
-        output = (e.stdout or b"").decode(errors="replace") + (e.stderr or b"").decode(errors="replace")
-        output += f"\n\n--- TIMEOUT after {timeout}s ---\n"
+
+        try:
+            output, _ = proc.communicate(timeout=timeout)
+            exit_code = proc.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            # Kill entire process group (run.sh, make, QEMU, etc.)
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+            time.sleep(3)
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            # Read remaining output after kill (communicate() drains the pipe)
+            try:
+                output, _ = proc.communicate(timeout=10)
+            except (subprocess.TimeoutExpired, Exception):
+                try:
+                    output = proc.stdout.read() or ""
+                except Exception:
+                    output = ""
+                proc.kill()
+                proc.wait()
+            exit_code = -1
+            output += f"\n\n--- TIMEOUT after {timeout}s ---\n"
     except Exception as e:
         exit_code = -2
         output = f"Exception running test: {e}\n"
@@ -180,12 +213,14 @@ def run_single_test(
 
 
 def save_results(results_file: Path, results: list[dict], metadata: dict):
-    """Save results incrementally."""
+    """Save results atomically (write to .tmp then rename)."""
     data = {
         "metadata": metadata,
         "results": results,
     }
-    results_file.write_text(json.dumps(data, indent=2) + "\n")
+    tmp = results_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.rename(results_file)
 
 
 def load_previous_results(path: Path) -> dict[str, dict]:
@@ -272,6 +307,12 @@ def main():
         default=0,
         help="Stop after N failures (0=never stop)",
     )
+    parser.add_argument(
+        "--skip-outcomes",
+        nargs="+",
+        default=[],
+        help="When resuming, re-run CVEs with these outcomes instead of skipping (e.g. --skip-outcomes FAIL TIMEOUT)",
+    )
     args = parser.parse_args()
 
     registry = load_registry()
@@ -317,7 +358,20 @@ def main():
             print(f"Resume file not found: {args.resume}", file=sys.stderr)
             sys.exit(1)
         previous = load_previous_results(args.resume)
-        print(f"Loaded {len(previous)} previous results from {args.resume}")
+        # If --skip-outcomes specified, remove those from previous so they re-run
+        if args.skip_outcomes:
+            rerun_keys = [
+                k for k, v in previous.items()
+                if v.get("outcome") in args.skip_outcomes
+            ]
+            for k in rerun_keys:
+                del previous[k]
+            print(
+                f"Loaded {len(previous)} previous results from {args.resume} "
+                f"(re-running {len(rerun_keys)} with outcomes: {', '.join(args.skip_outcomes)})"
+            )
+        else:
+            print(f"Loaded {len(previous)} previous results from {args.resume}")
 
     # Setup output directory
     run_id = datetime.now().strftime("%Y-%m-%d_%H%M%S")

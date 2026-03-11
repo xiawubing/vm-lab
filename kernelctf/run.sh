@@ -88,10 +88,14 @@ info "=== Compiling exploit from $EXPLOIT_SRC ==="
 rm -rf "$SCRIPT_DIR/exp"
 mkdir -p "$SCRIPT_DIR/exp"
 
-# Copy source files
-cp "$EXPLOIT_SRC"/*.c "$SCRIPT_DIR/exp/" 2>/dev/null || true
-cp "$EXPLOIT_SRC"/*.h "$SCRIPT_DIR/exp/" 2>/dev/null || true
-cp "$EXPLOIT_SRC"/Makefile "$SCRIPT_DIR/exp/" 2>/dev/null || true
+# Copy all source files (*.c, *.h, *.s, *.py, Makefile, run.sh, deps, libs, etc.)
+# Exclude bzImage (large kernel) and pre-compiled exploit binary (we compile fresh)
+for f in "$EXPLOIT_SRC"/*; do
+    fname="$(basename "$f")"
+    [ "$fname" = "bzImage" ] && continue
+    [ "$fname" = "exploit" ] && continue
+    cp -a "$f" "$SCRIPT_DIR/exp/" 2>/dev/null || true
+done
 
 # Create keyutils.h stub (syscall-based, no libkeyutils-dev needed)
 if [ ! -f "$SCRIPT_DIR/exp/keyutils.h" ]; then
@@ -131,19 +135,22 @@ if [ -f "$SCRIPT_DIR/exp/exploit.c" ] && ! grep -q "cbq_compat.h" "$SCRIPT_DIR/e
     sed -i 's|#include "netlink_utils.h"|#include "cbq_compat.h"\n#include "netlink_utils.h"|' "$SCRIPT_DIR/exp/exploit.c"
 fi
 
-# Patch shell-spawning functions (getroot/pwn/etc.) to read the flag directly
-# This avoids the need for interactive shell which blocks automated runs
-if [ -f "$SCRIPT_DIR/exp/exploit.c" ] && grep -qE 'execve.*(/bin/sh|/bin/bash)' "$SCRIPT_DIR/exp/exploit.c"; then
+# Best-effort shell patching (init.sh privilege escalation monitor is the primary mechanism)
+# Match: execve("/bin/sh"), split /bin/sh in variable, or system("cat /flag")
+if [ -f "$SCRIPT_DIR/exp/exploit.c" ] && grep -qE 'execve.*(/bin/sh|/bin/bash)|/bin/(ba)?sh|system\s*\(.*(/bin/sh|cat.*/flag)' "$SCRIPT_DIR/exp/exploit.c"; then
     info "Patching shell-spawning function to read flag directly..."
-    python3 "$SCRIPT_DIR/patches/patch_shell_spawn.py" "$SCRIPT_DIR/exp/exploit.c"
+    python3 "$SCRIPT_DIR/patches/patch_shell_spawn.py" "$SCRIPT_DIR/exp/exploit.c" 2>&1 || true
 fi
 
 # Try compilation
+# NOTE: no `make prerequisites` — it calls `sudo apt-get` which blocks in automation.
+# All needed packages should be pre-installed via setup.sh --deps.
+# stdin is redirected from /dev/null to prevent any interactive prompts.
 COMPILED=false
 cd "$SCRIPT_DIR/exp"
 if [ -f Makefile ]; then
     info "Makefile detected — building with make..."
-    if (make prerequisites 2>&1 || true) && make exploit 2>&1; then
+    if timeout 120 make exploit </dev/null 2>&1; then
         ok "Makefile compilation succeeded"
         COMPILED=true
     else
@@ -162,7 +169,7 @@ cd "$SCRIPT_DIR"
 
 if [ ! -f "$SCRIPT_DIR/exp/exploit" ]; then
     if [ -f "$EXPLOIT_SRC/exploit" ]; then
-        warn "Using pre-compiled binary from repo (interactive bash mode)"
+        info "Using pre-compiled binary from repo"
         cp "$EXPLOIT_SRC/exploit" "$SCRIPT_DIR/exp/exploit"
     else
         err "No exploit binary available"
@@ -175,12 +182,13 @@ ok "Exploit binary ready: $(file "$SCRIPT_DIR/exp/exploit" | cut -d: -f2 | xargs
 
 # --- Step 2 & 3: Generate flag, launch VM (with retries) ---
 
-MAX_ATTEMPTS=3
+MAX_ATTEMPTS="${KCTF_MAX_ATTEMPTS:-3}"
 FOUND=false
 ATTEMPT=0
 DURATION=0
 
 mkdir -p "$SCRIPT_DIR/logs"
+rm -f "$SCRIPT_DIR/logs/repro_log_"*.txt
 chmod +x "$SCRIPT_DIR/qemu.sh"
 
 while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ] && ! $FOUND; do
