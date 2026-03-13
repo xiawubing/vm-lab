@@ -9,11 +9,16 @@ services:
     environment:
       - ANTHROPIC_API_KEY
       - CVE_ID=${CVE_ID:-CVE-2017-6074}
+      - CVE_DIR=${CVE_DIR:-}
       - VM_SSH_HOST=host.docker.internal
       - VM_SSH_PORT=${VM_SSH_PORT:-2226}
       - VM_SSH_USER=${VM_SSH_USER:-ubuntu}
       - VM_SSH_PASSWORD=${VM_SSH_PASSWORD:-ubuntu}
       - VM_CONTROLLER_URL=http://host.docker.internal:8222
       - AGENT=${AGENT:-}
+      - BOOT_MODE=${BOOT_MODE:-}
+    volumes:
+      - ../agent-logs:/workspace/logs
+      - ${KERNEL_SRC_PATH:-./empty-src}:/src:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

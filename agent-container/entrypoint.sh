@@ -27,8 +27,9 @@ else
     echo "ANTHROPIC_API_KEY is set (${#ANTHROPIC_API_KEY} chars)"
 fi
 
-# Check if CVE info file exists
-CVE_INFO="/app/cve-info/${CVE_ID}.md"
+# Check if CVE info file exists (CVE_DIR may differ from CVE_ID for kernelctf entries)
+CVE_INFO_NAME="${CVE_DIR:-$CVE_ID}"
+CVE_INFO="/app/cve-info/${CVE_INFO_NAME}.md"
 if [ -f "$CVE_INFO" ]; then
     echo "CVE info: $CVE_INFO"
 else
@@ -43,9 +44,18 @@ if [ "${AGENT}" = "shell" ]; then
 else
     echo "Starting Claude Code agent..."
     cd /workspace
+    mkdir -p /workspace/logs/code
+
+    # Stream filter produces both terminal output and Markdown log
     claude -p --model claude-sonnet-4-6 --dangerously-skip-permissions \
-        --max-budget-usd 5.00 \
+        --max-budget-usd 2.50 \
         --verbose --output-format stream-json \
-        "You are testing ${CVE_ID}. Read CLAUDE.md for your tools and workflow, then read /app/cve-info/${CVE_ID}.md for the vulnerability details and PoC source code. Follow the steps: verify VM, check environment, compile the PoC, run the exploit, and report results." \
-        2>/dev/null | python3 /app/stream_filter.py
+        "You are testing ${CVE_ID}. Read CLAUDE.md for your tools and workflow, then read /app/cve-info/${CVE_INFO_NAME}.md for the vulnerability details and PoC source code. Follow the steps: verify VM, check environment, compile the PoC, run the exploit, and report results." \
+        2>/dev/null | python3 /app/stream_filter.py --cve "${CVE_ID}" --log-dir /workspace/logs
+
+    echo ""
+    echo "=== Session logs ==="
+    echo "  Markdown log:  $(ls -t /workspace/logs/session_*.md 2>/dev/null | head -1)"
+    echo "  Code versions: /workspace/logs/code/"
+    ls -la /workspace/logs/code/ 2>/dev/null | grep -v "^total" | grep -v "^d" || echo "  (no code generated)"
 fi

@@ -107,15 +107,8 @@ if [ "$BOOT_MODE" = "kernelctf" ]; then
         echo "[+] Kernel source: COS $COS_BUILD -> $COS_DIR"
     fi
 
-    # Generate docker-compose.override.yml for volume mount
-    cat > "$SCRIPT_DIR/agent-container/docker-compose.override.yml" <<OVERRIDE
-services:
-  agent:
-    volumes:
-      - ${KERNEL_SRC_DIR}/active:/src:ro
-    environment:
-      - BOOT_MODE=kernelctf
-OVERRIDE
+    BOOT_MODE="kernelctf"
+    KERNEL_SRC_PATH="${KERNEL_SRC_DIR}/active"
 
 else
     # cloud-init mode
@@ -130,8 +123,8 @@ else
     echo "  Kernel src: ${KERNEL_SOURCE_DIR:-none}"
     echo "=============================================="
 
-    # Remove override file if it exists from a previous kernelCTF run
-    rm -f "$SCRIPT_DIR/agent-container/docker-compose.override.yml"
+    BOOT_MODE=""
+    KERNEL_SRC_PATH=""
 fi
 
 # 1. Start VM controller in background (kills any existing one first)
@@ -151,7 +144,6 @@ cleanup() {
     echo "[*] Stopping VM controller (pid $CONTROLLER_PID)..."
     kill $CONTROLLER_PID 2>/dev/null
     wait $CONTROLLER_PID 2>/dev/null
-    rm -f "$SCRIPT_DIR/agent-container/docker-compose.override.yml"
 }
 trap cleanup EXIT
 
@@ -162,18 +154,65 @@ cd "$SCRIPT_DIR/agent-container"
 # Clean up any stale containers to prevent duplicate log output
 docker compose down --remove-orphans 2>/dev/null || true
 
+# Ensure log directory exists and is writable by container's agent user (UID 1000).
+# Docker auto-creates bind-mount dirs as root:root, so fix ownership if needed.
+LOG_DIR="$SCRIPT_DIR/agent-logs"
+if [ -d "$LOG_DIR" ] && [ ! -w "$LOG_DIR" ]; then
+    echo "[*] Fixing agent-logs ownership (requires sudo)..."
+    sudo chown "$(id -u):$(id -g)" "$LOG_DIR" 2>/dev/null \
+        || docker run --rm -v "$LOG_DIR":/d alpine chown "$(id -u):$(id -g)" /d \
+        || { echo "ERROR: Cannot fix $LOG_DIR permissions. Run: sudo chown \$(id -u):\$(id -g) $LOG_DIR"; exit 1; }
+fi
+mkdir -p "$LOG_DIR" "$LOG_DIR/code"
+chmod 777 "$LOG_DIR" "$LOG_DIR/code"
+
 CVE_ID="$CVE_ID" \
 CVE_ID_LOWER="$(echo "$CVE_ID" | tr '[:upper:]' '[:lower:]')" \
+CVE_DIR="${CVE_DIR:-$CVE_ID}" \
 VM_SSH_PORT="$SSH_PORT" \
 VM_SSH_USER="$SSH_USER" \
 VM_SSH_PASSWORD="$SSH_PASSWORD" \
 KERNEL_SOURCE_URL="$KERNEL_SOURCE_URL" \
 KERNEL_SOURCE_DIR="$KERNEL_SOURCE_DIR" \
+BOOT_MODE="$BOOT_MODE" \
+KERNEL_SRC_PATH="$KERNEL_SRC_PATH" \
 AGENT="${AGENT:-}" \
 docker compose up --build --force-recreate
 
-# After agent exits, offer manual access if VM is still running
+# After agent exits, show session summary
 echo ""
-echo "[*] Agent finished. VM may still be running."
-echo "    SSH in manually:  ssh -p ${SSH_PORT} ${SSH_USER}@127.0.0.1"
-echo "    Stop VM:          pkill -f 'qemu.*hostfwd.*:${SSH_PORT}-'"
+echo "=============================================="
+echo "  Agent session complete: $CVE_ID"
+echo "=============================================="
+echo ""
+
+# Find and display the latest log
+LATEST_MD=$(ls -t "$LOG_DIR"/session_*.md 2>/dev/null | head -1)
+if [ -n "$LATEST_MD" ]; then
+    echo "  Session log:  $LATEST_MD"
+    echo ""
+    # Show the summary section from the Markdown log
+    if grep -q "## Session Summary" "$LATEST_MD" 2>/dev/null; then
+        echo "  --- Summary ---"
+        sed -n '/## Session Summary/,$ p' "$LATEST_MD" | head -10 | sed 's/^/  /'
+        echo ""
+    fi
+fi
+
+# List code iterations
+CODE_FILES=$(ls "$LOG_DIR/code"/*_v*.c 2>/dev/null)
+if [ -n "$CODE_FILES" ]; then
+    echo "  Code iterations:"
+    for f in $CODE_FILES; do
+        echo "    $(basename "$f")  ($(wc -l < "$f") lines)"
+    done
+    LATEST_CODE=$(ls -t "$LOG_DIR/code"/*_latest.c 2>/dev/null | head -1)
+    if [ -n "$LATEST_CODE" ]; then
+        echo ""
+        echo "  Latest code: $LATEST_CODE"
+    fi
+    echo ""
+fi
+
+echo "  SSH:  ssh -p ${SSH_PORT} ${SSH_USER}@127.0.0.1"
+echo "  Stop: pkill -f 'qemu.*hostfwd.*:${SSH_PORT}-'"
