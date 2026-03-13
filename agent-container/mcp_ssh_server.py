@@ -6,6 +6,7 @@ a vulnerable kernel/userspace via SSH/SFTP, and to compile exploit code
 on the VM.
 """
 
+import base64
 import os
 import socket
 import threading
@@ -34,8 +35,12 @@ _ssh_lock = threading.Lock()
 _ssh_client: paramiko.SSHClient | None = None
 
 
-def _get_ssh() -> paramiko.SSHClient:
-    """Get or create a reusable SSH connection to the VM."""
+def _get_ssh(max_retries: int = 3) -> paramiko.SSHClient:
+    """Get or create a reusable SSH connection to the VM.
+
+    Retries on transient failures (e.g. Dropbear still generating host keys,
+    QEMU hostfwd recovering from a previous connection).
+    """
     global _ssh_client
     with _ssh_lock:
         if _ssh_client is not None:
@@ -50,19 +55,33 @@ def _get_ssh() -> paramiko.SSHClient:
                     pass
                 _ssh_client = None
 
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            hostname=VM_HOST,
-            port=VM_PORT,
-            username=VM_USER,
-            password=VM_PASSWORD,
-            timeout=10,
-            allow_agent=False,
-            look_for_keys=False,
-        )
-        _ssh_client = client
-        return _ssh_client
+        last_err: Exception | None = None
+        for attempt in range(max_retries):
+            if attempt > 0:
+                time.sleep(2 * attempt)  # backoff: 2s, 4s
+            try:
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(
+                    hostname=VM_HOST,
+                    port=VM_PORT,
+                    username=VM_USER,
+                    password=VM_PASSWORD,
+                    timeout=10,
+                    allow_agent=False,
+                    look_for_keys=False,
+                )
+                # Enable SSH keepalive to detect dead connections early
+                # and prevent idle timeout disconnects
+                transport = client.get_transport()
+                if transport:
+                    transport.set_keepalive(15)
+                _ssh_client = client
+                return _ssh_client
+            except Exception as e:
+                last_err = e
+                continue
+        raise last_err
 
 
 def _ssh_error_message(e: Exception) -> str:
@@ -94,6 +113,38 @@ def _reset_ssh():
     global _ssh_client
     with _ssh_lock:
         _ssh_client = None
+
+
+def _upload_via_ssh(client: paramiko.SSHClient, local_path: str, remote_path: str) -> None:
+    """Upload a file using base64 piped through stdin (fallback when SFTP is unavailable)."""
+    with open(local_path, "rb") as f:
+        data = f.read()
+    encoded = base64.b64encode(data).decode() + "\n"
+    # Pipe base64 data through stdin to avoid command-line length limits
+    _, stdout, stderr = client.exec_command(
+        f"base64 -d > '{remote_path}'", timeout=120,
+    )
+    stdout.channel.sendall(encoded.encode())
+    stdout.channel.shutdown_write()
+    exit_code = stdout.channel.recv_exit_status()
+    if exit_code != 0:
+        err_msg = stderr.read().decode().strip()
+        raise OSError(f"base64 decode failed (exit {exit_code}): {err_msg}")
+
+
+def _download_via_ssh(client: paramiko.SSHClient, remote_path: str, local_path: str) -> None:
+    """Download a file using base64-encoded SSH commands (fallback when SFTP is unavailable)."""
+    _, stdout, stderr = client.exec_command(
+        f"base64 '{remote_path}'", timeout=60,
+    )
+    encoded = stdout.read().decode().strip()
+    exit_code = stdout.channel.recv_exit_status()
+    if exit_code != 0:
+        err_msg = stderr.read().decode().strip()
+        raise FileNotFoundError(f"Remote file not found or unreadable: {remote_path} ({err_msg})")
+    data = base64.b64decode(encoded)
+    with open(local_path, "wb") as f:
+        f.write(data)
 
 
 @mcp.tool()
@@ -133,16 +184,15 @@ def vm_execute(command: str, timeout: int = 30) -> str:
         result += f"\n[exit code: {exit_code}]"
         return result.strip()
     except _SSH_ERRORS as e:
-        # Reset pooled connection on failure
-        global _ssh_client
-        with _ssh_lock:
-            _ssh_client = None
+        _reset_ssh()
         return _ssh_error_message(e)
 
 
 @mcp.tool()
 def vm_upload_file(local_path: str, remote_path: str) -> str:
     """Upload a file from the Docker container to the VM via SFTP.
+
+    Falls back to base64-over-SSH when SFTP is unavailable (e.g. Dropbear).
 
     Args:
         local_path: Path to the file inside the Docker container.
@@ -153,11 +203,19 @@ def vm_upload_file(local_path: str, remote_path: str) -> str:
     """
     try:
         client = _get_ssh()
-        sftp = client.open_sftp()
-        sftp.put(local_path, remote_path)
-        sftp.close()
-        return f"Uploaded {local_path} -> {remote_path}"
+        try:
+            sftp = client.open_sftp()
+            sftp.put(local_path, remote_path)
+            sftp.close()
+            return f"Uploaded {local_path} -> {remote_path}"
+        except _SSH_ERRORS:
+            raise
+        except Exception:
+            # SFTP subsystem unavailable — fall back to base64-over-SSH
+            _upload_via_ssh(client, local_path, remote_path)
+            return f"Uploaded {local_path} -> {remote_path} (via ssh fallback)"
     except _SSH_ERRORS as e:
+        _reset_ssh()
         return _ssh_error_message(e)
     except FileNotFoundError:
         return f"Local file not found: {local_path}"
@@ -166,6 +224,8 @@ def vm_upload_file(local_path: str, remote_path: str) -> str:
 @mcp.tool()
 def vm_download_file(remote_path: str, local_path: str) -> str:
     """Download a file from the VM to the Docker container via SFTP.
+
+    Falls back to base64-over-SSH when SFTP is unavailable (e.g. Dropbear).
 
     Args:
         remote_path: Path to the file on the VM.
@@ -176,11 +236,19 @@ def vm_download_file(remote_path: str, local_path: str) -> str:
     """
     try:
         client = _get_ssh()
-        sftp = client.open_sftp()
-        sftp.get(remote_path, local_path)
-        sftp.close()
-        return f"Downloaded {remote_path} -> {local_path}"
+        try:
+            sftp = client.open_sftp()
+            sftp.get(remote_path, local_path)
+            sftp.close()
+            return f"Downloaded {remote_path} -> {local_path}"
+        except _SSH_ERRORS:
+            raise
+        except Exception:
+            # SFTP subsystem unavailable — fall back to base64-over-SSH
+            _download_via_ssh(client, remote_path, local_path)
+            return f"Downloaded {remote_path} -> {local_path} (via ssh fallback)"
     except _SSH_ERRORS as e:
+        _reset_ssh()
         return _ssh_error_message(e)
     except FileNotFoundError:
         return f"Remote file not found: {remote_path}"
@@ -228,9 +296,15 @@ def vm_compile_and_run(
 
     try:
         client = _get_ssh()
-        sftp = client.open_sftp()
-        sftp.put(src_path, remote_src)
-        sftp.close()
+        try:
+            sftp = client.open_sftp()
+            sftp.put(src_path, remote_src)
+            sftp.close()
+        except _SSH_ERRORS:
+            raise
+        except Exception:
+            # SFTP unavailable — fall back to base64-over-SSH
+            _upload_via_ssh(client, src_path, remote_src)
     except _SSH_ERRORS as e:
         return _ssh_error_message(e)
     except Exception as e:
@@ -361,6 +435,47 @@ def vm_restart() -> str:
     if "ssh" in result:
         parts.append(f"SSH: {result['ssh']}")
     return " | ".join(parts)
+
+
+@mcp.tool()
+def vm_get_log(lines: int = 50) -> str:
+    """Get recent QEMU console output for diagnosing boot/SSH failures.
+
+    Use this when SSH is unreachable to see what the VM is actually doing
+    (kernel panic, init errors, networking issues, etc.).
+
+    Args:
+        lines: Number of recent lines to return (default 50, max 200).
+
+    Returns:
+        Recent VM console output, or error message.
+    """
+    result = _controller_request("GET", "/log")
+    if "error" in result:
+        return result["error"]
+    log_lines = result.get("lines", [])
+    if not log_lines:
+        return "No VM console output available"
+    n = min(lines, 200)
+    return "\n".join(log_lines[-n:])
+
+
+@mcp.tool()
+def vm_reset_overlay() -> str:
+    """Reset the VM's qcow2 overlay to start fresh.
+
+    Stops the VM and deletes the overlay file so the next boot creates
+    a clean one. Use this when SSH repeatedly fails and the overlay
+    may be corrupted or in a bad state. Only works in kernelCTF mode.
+
+    Returns:
+        Status message.
+    """
+    _reset_ssh()
+    result = _controller_request("POST", "/reset")
+    if "error" in result:
+        return result["error"]
+    return result.get("message", str(result))
 
 
 @mcp.tool()
