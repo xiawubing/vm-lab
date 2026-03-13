@@ -36,6 +36,39 @@ download() {
     ok "Saved: $dest ($(du -sh "$dest" | cut -f1))"
 }
 
+install_dropbear() {
+    local dest="$SCRIPT_DIR/init-interactive"
+    if [ -f "$dest/dropbear" ] && [ -f "$dest/dropbearkey" ]; then
+        ok "Dropbear binaries already exist"
+        return 0
+    fi
+    info "=== Building static dropbear SSH server ==="
+    local build_dir
+    build_dir=$(mktemp -d)
+    (
+        cd "$build_dir"
+        info "Downloading dropbear 2024.86..."
+        wget -q --show-progress --timeout=60 --tries=3 \
+            "https://matt.ucc.asn.au/dropbear/releases/dropbear-2024.86.tar.bz2"
+        tar xjf dropbear-2024.86.tar.bz2
+        cd dropbear-2024.86
+        info "Configuring (static build, no zlib/pam)..."
+        ./configure --enable-static --disable-zlib --disable-pam \
+            LDFLAGS="-static" CFLAGS="-Os" >/dev/null 2>&1
+        info "Compiling (this may take a minute)..."
+        make -j"$(nproc)" STATIC=1 PROGRAMS="dropbear dropbearkey" >/dev/null 2>&1
+        cp dropbear dropbearkey "$dest/"
+        chmod +x "$dest/dropbear" "$dest/dropbearkey"
+    )
+    rm -rf "$build_dir"
+    if [ -f "$dest/dropbear" ] && [ -f "$dest/dropbearkey" ]; then
+        ok "Dropbear installed: $dest/dropbear ($(du -sh "$dest/dropbear" | cut -f1))"
+    else
+        err "Dropbear build failed"
+        return 1
+    fi
+}
+
 install_deps() {
     info "Checking dependencies..."
     local missing=()
@@ -51,6 +84,8 @@ install_deps() {
     dpkg -s libnl-cli-3-dev &>/dev/null 2>&1 || missing+=("libnl-cli-3-dev")
     dpkg -s libnl-route-3-dev &>/dev/null 2>&1 || missing+=("libnl-route-3-dev")
     dpkg -s libip4tc-dev &>/dev/null 2>&1 || missing+=("libip4tc-dev")
+    dpkg -s libnetfilter-queue-dev &>/dev/null 2>&1 || missing+=("libnetfilter-queue-dev")
+    dpkg -s libnl-3-dev &>/dev/null 2>&1 || missing+=("libnl-3-dev")
     command -v musl-gcc &>/dev/null || missing+=("musl-tools")
     command -v nasm &>/dev/null || missing+=("nasm")
 
@@ -260,6 +295,7 @@ main() {
 
     install_deps
     download_base
+    install_dropbear
 
     # Download specific releases if provided
     for release in "$@"; do

@@ -74,6 +74,7 @@ SSH_PORT="$DEFAULT_PORT"
 RESET=false
 NO_EXPLOIT=false
 NOKASLR=false
+LOCK_ROOT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -82,6 +83,7 @@ while [[ $# -gt 0 ]]; do
         --list|-l)   list_cves ;;
         --no-exploit) NO_EXPLOIT=true; shift ;;
         --nokaslr)   NOKASLR=true; shift ;;
+        --lock-root) LOCK_ROOT=true; shift ;;
         --help|-h)   usage ;;
         *)           TARGET="$1"; shift ;;
     esac
@@ -142,7 +144,7 @@ if [ ! -f "$BZIMAGE" ]; then
 fi
 
 if [ ! -f "$ROOTFS" ]; then
-    err "rootfs_repro_v2.img not found. Run: ./setup.sh"
+    err "No rootfs image found. Run: ./setup.sh"
     exit 1
 fi
 
@@ -160,9 +162,34 @@ if $RESET && [ -f "$OVERLAY" ]; then
     rm -f "$OVERLAY"
 fi
 
+# Validate existing overlay's backing file matches current ROOTFS
+if [ -f "$OVERLAY" ]; then
+    BACKING=$(qemu-img info --output=json "$OVERLAY" 2>/dev/null | \
+              python3 -c "import sys,json; print(json.load(sys.stdin).get('full-backing-filename',''))" 2>/dev/null || true)
+    if [ -n "$BACKING" ] && [ "$BACKING" != "$ROOTFS" ]; then
+        warn "Overlay backing file mismatch: $BACKING != $ROOTFS"
+        info "Deleting stale overlay..."
+        rm -f "$OVERLAY"
+    fi
+    # Also check virtual size — overlays created before the 4G fix are undersized
+    if [ -f "$OVERLAY" ]; then
+        VSIZE=$(qemu-img info --output=json "$OVERLAY" 2>/dev/null | \
+                python3 -c "import sys,json; print(json.load(sys.stdin).get('virtual-size',0))" 2>/dev/null || echo 0)
+        if [ "$VSIZE" -lt 4294967296 ] 2>/dev/null; then
+            warn "Overlay virtual size too small ($((VSIZE/1048576)) MiB < 4096 MiB)"
+            info "Deleting undersized overlay..."
+            rm -f "$OVERLAY"
+        fi
+    fi
+fi
+
 if [ ! -f "$OVERLAY" ]; then
-    info "Creating qcow2 overlay (first boot will install SSH, ~30s)..."
-    qemu-img create -f qcow2 -b "$ROOTFS" -F raw "$OVERLAY" 2>/dev/null
+    info "Creating qcow2 overlay..."
+    # Virtual size must cover the full partition table (4G) — the raw rootfs is
+    # truncated to ~618 MiB to save space, but the partition inside spans 4 GiB.
+    # Without the explicit size, newer kernels (>=6.6) cannot mount the ext4
+    # filesystem because the journal lives beyond the truncated boundary.
+    qemu-img create -f qcow2 -b "$ROOTFS" -F raw "$OVERLAY" 4G 2>/dev/null
     ok "Overlay: $OVERLAY"
 fi
 
@@ -171,7 +198,10 @@ fi
 EXP_DIR="$SCRIPT_DIR/exp-interactive"
 mkdir -p "$EXP_DIR"
 
-if ! $NO_EXPLOIT && [ -n "$EXPLOIT_SRC" ] && [ -d "$EXPLOIT_SRC" ]; then
+if $NO_EXPLOIT; then
+    # Clean directory so agent starts from scratch
+    rm -f "$EXP_DIR"/* 2>/dev/null || true
+elif [ -n "$EXPLOIT_SRC" ] && [ -d "$EXPLOIT_SRC" ]; then
     rm -f "$EXP_DIR"/*
     cp "$EXPLOIT_SRC"/* "$EXP_DIR/" 2>/dev/null || true
     ok "Exploit source copied from $(basename "$EXPLOIT_SRC")"
@@ -194,6 +224,10 @@ if $NOKASLR; then
     info "KASLR disabled"
 fi
 
+if $LOCK_ROOT; then
+    CMDLINE="$CMDLINE lockroot=1"
+fi
+
 # init=/init triggers rootfs's /init which mounts 9p 'init' tag and runs init.sh
 CMDLINE="$CMDLINE init=/init"
 
@@ -204,7 +238,11 @@ echo "=============================================="
 echo -e "  Kernel:   ${GREEN}$RELEASE${NC}"
 [ -n "$CVE_DIR" ] && echo -e "  CVE:      ${GREEN}$CVE_DIR${NC}"
 echo -e "  SSH:      ${GREEN}ssh -p $SSH_PORT user@127.0.0.1${NC}"
-echo -e "  Creds:    user / user  |  root / root"
+if $LOCK_ROOT; then
+    echo -e "  Creds:    user / user  (root locked)"
+else
+    echo -e "  Creds:    user / user  |  root / root"
+fi
 echo -e "  Exploit:  /home/user/exploit/"
 echo -e "  Reset:    $0 $TARGET --reset"
 echo -e "  Exit VM:  Ctrl+A then X"

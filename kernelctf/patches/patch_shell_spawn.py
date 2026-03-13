@@ -58,12 +58,16 @@ if execve_line is None:
     print('No execve /bin/sh found')
     sys.exit(0)
 
-# Find the enclosing function: scan backwards for 'void funcname(...) {'
+# Find the enclosing function: scan backwards for 'type funcname(...) {'
+# Supports: void, static void, int, static int, etc.
 func_start = None
 func_name = None
 for i in range(execve_line, -1, -1):
-    m = re.match(r'void\s+(\w+)\s*\([^)]*\)\s*\{', lines[i])
+    m = re.match(r'(?:static\s+)?(?:void|int|long|unsigned)\s+(\w+)\s*\([^)]*\)\s*\{', lines[i])
     if m:
+        # Don't replace main()
+        if m.group(1) == 'main':
+            break
         func_start = i
         func_name = m.group(1)
         break

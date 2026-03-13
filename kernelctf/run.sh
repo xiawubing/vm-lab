@@ -155,6 +155,22 @@ if [ -f Makefile ]; then
         COMPILED=true
     else
         warn "Makefile compilation failed"
+        # Fallback: if Makefile failed but exploit.c exists, try simple gcc
+        if [ -f exploit.c ] && [ ! -f exploit ]; then
+            info "Trying fallback gcc compilation..."
+            # Collect all .c files in current directory
+            C_FILES=$(ls *.c 2>/dev/null | tr '\n' ' ')
+            if gcc -I. -o exploit $C_FILES -O0 -static -lpthread 2>&1; then
+                ok "Fallback gcc compilation succeeded"
+                COMPILED=true
+            else
+                # Try with just exploit.c
+                if gcc -I. -o exploit exploit.c -O0 -static -lpthread 2>&1; then
+                    ok "Fallback single-file compilation succeeded"
+                    COMPILED=true
+                fi
+            fi
+        fi
     fi
 elif [ -f exploit.c ]; then
     info "Compiling exploit.c..."
