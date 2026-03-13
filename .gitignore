@@ -38,6 +38,19 @@ kernelctf/smoke-results/
 # Runtime logs and diagnostics
 kernelctf/logs/
 kernelctf/setup-failed.log
+agent-logs/
+
+# Benchmark data (machine-generated)
+kernelctf/benchmark_baseline.json
+kernelctf/benchmark_record.jsonl
+kernelctf/benchmark_results/
+
+# Generated reports and plans
+PROGRESS_REPORT.md
+kernelctf/*_REPORT.md
+kernelctf/*_PLAN.md
+kernelctf/*_GUIDE.md
+kernelctf/*_ANALYSIS.md
 
 # === Local Claude Code settings ===
 .claude/settings.local.json
