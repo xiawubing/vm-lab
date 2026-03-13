@@ -12,6 +12,7 @@ Endpoints:
     POST /start           — Start the VM (runs start_vm script)
     POST /stop            — Stop the VM (kills QEMU process)
     POST /restart         — Stop then start
+    POST /reset           — Stop VM + delete overlay for fresh boot (kernelCTF only)
     GET  /log             — Last 50 lines of VM boot output
 """
 
@@ -121,7 +122,7 @@ def _start_vm() -> str:
             if not script_path.exists():
                 return f"interactive.sh not found: {script_path}"
             cmd = ["bash", str(script_path), RELEASE,
-                   "--port", str(SSH_PORT), "--no-exploit"]
+                   "--port", str(SSH_PORT), "--no-exploit", "--lock-root"]
         else:
             # cloud-init mode: use vm-scripts/
             script_path = VM_DIR / VM_SCRIPT
@@ -153,26 +154,78 @@ def _start_vm() -> str:
 
 
 def _wait_for_ssh(timeout: int = 180) -> str:
-    """Wait for VM SSH to become accessible."""
+    """Wait for VM SSH to become accessible and stable.
+
+    Performs two SSH checks with a gap to confirm the server is truly ready
+    (Dropbear with -R generates host keys on first connection, which can
+    cause subsequent connections to fail with EOF during negotiation).
+    """
     start = time.time()
+    ssh_cmd = [
+        "sshpass", "-p", SSH_PASSWORD, "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=3",
+        "-p", str(SSH_PORT),
+        f"{SSH_USER}@127.0.0.1",
+    ]
+    kernel = ""
     while time.time() - start < timeout:
+        # Check if VM process exited early (kernel panic during boot)
+        with _vm_lock:
+            if _vm_proc is not None and _vm_proc.poll() is not None:
+                recent = "\n".join(_vm_log[-20:]) if _vm_log else "(no output)"
+                return f"VM exited (code {_vm_proc.returncode}) before SSH was ready. Console:\n{recent}"
         try:
             result = subprocess.run(
-                ["sshpass", "-p", SSH_PASSWORD, "ssh",
-                 "-o", "StrictHostKeyChecking=no",
-                 "-o", "UserKnownHostsFile=/dev/null",
-                 "-o", "ConnectTimeout=3",
-                 "-p", str(SSH_PORT),
-                 f"{SSH_USER}@127.0.0.1", "uname -r"],
+                ssh_cmd + ["uname -r"],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode == 0:
                 kernel = result.stdout.strip()
-                return f"VM is ready. Kernel: {kernel}"
+                break
         except (subprocess.TimeoutExpired, Exception):
             pass
         time.sleep(5)
-    return f"Timeout after {timeout}s waiting for SSH"
+    else:
+        recent = "\n".join(_vm_log[-20:]) if _vm_log else "(no output)"
+        return f"Timeout after {timeout}s waiting for SSH. Console:\n{recent}"
+
+    # Stability check: verify SSH works reliably after initial success.
+    # Dropbear may still be settling (key generation, socket setup).
+    # Retry up to 3 times to confirm SSH is truly stable.
+    for stability_attempt in range(3):
+        time.sleep(2)
+        try:
+            result = subprocess.run(
+                ssh_cmd + ["true"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                break
+        except (subprocess.TimeoutExpired, Exception):
+            pass
+    else:
+        # All stability checks failed — wait a bit longer
+        time.sleep(5)
+
+    return f"VM is ready. Kernel: {kernel}"
+
+
+def _reset_overlay() -> str:
+    """Delete the qcow2 overlay so next boot creates a fresh one. KernelCTF mode only."""
+    if BOOT_MODE != "kernelctf":
+        return "Reset only supported in kernelCTF mode"
+    if _is_vm_running():
+        stop_msg = _stop_vm()
+    else:
+        stop_msg = "VM was not running"
+    overlay_dir = VM_DIR / "kernelctf" / "images"
+    overlay = overlay_dir / f"{RELEASE}-interactive.qcow2"
+    if overlay.exists():
+        overlay.unlink()
+        return f"{stop_msg}. Overlay deleted: {overlay.name}. Next boot will create a fresh one."
+    return f"{stop_msg}. No overlay found at {overlay}"
 
 
 class VMHandler(BaseHTTPRequestHandler):
@@ -226,6 +279,11 @@ class VMHandler(BaseHTTPRequestHandler):
                     "stop": stop_msg,
                     "start": start_msg,
                 })
+
+        elif self.path == "/reset":
+            msg = _reset_overlay()
+            self._send_json(200, {"message": msg})
+
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -277,7 +335,7 @@ def main():
         print(f"[vm-controller] Release: {RELEASE} (SSH port {SSH_PORT}, user {SSH_USER})")
     else:
         print(f"[vm-controller] VM script: {VM_SCRIPT} (SSH port {SSH_PORT}, user {SSH_USER})")
-    print(f"[vm-controller] Endpoints: GET /status, POST /start, POST /stop, POST /restart, GET /log")
+    print(f"[vm-controller] Endpoints: GET /status, POST /start, POST /stop, POST /restart, POST /reset, GET /log")
 
     try:
         server.serve_forever()
