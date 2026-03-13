@@ -28,6 +28,10 @@ kernelctf/exp/
 kernelctf/exp-interactive/
 kernelctf/exploit
 
+# Static dropbear binaries (built by setup.sh)
+kernelctf/init-interactive/dropbear
+kernelctf/init-interactive/dropbearkey
+
 # Smoke test results (large, machine-generated)
 kernelctf/smoke-results/
 
@@ -37,6 +41,10 @@ kernelctf/setup-failed.log
 
 # === Local Claude Code settings ===
 .claude/settings.local.json
+
+# Agent container generated artifacts
+agent-container/empty-src/
+agent-container/docker-compose.override.yml
 
 # === Runtime / editor artifacts ===
 *.swp

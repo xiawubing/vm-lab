@@ -95,6 +95,7 @@ HTTP REST service running on the host (port 8222) for VM lifecycle management:
 | `/start` | POST | Start the VM, wait for SSH readiness |
 | `/stop` | POST | Kill QEMU process |
 | `/restart` | POST | Stop + start + wait for SSH |
+| `/reset` | POST | Stop VM + delete overlay for fresh boot (kernelCTF only) |
 | `/log` | GET | Get last 50 lines of VM boot output |
 
 Configured via `--cve` argument; reads `cve-registry.json` for script/port mapping.
@@ -112,6 +113,8 @@ FastMCP server exposing these tools to the Claude Code agent inside Docker:
 | `vm_compile_and_run(source_code, filename, compile_flags, run_timeout, upload_only)` | Compile C code on VM, optionally run |
 | `vm_run_exploit(binary, success_marker, failure_marker, poll_timeout, poll_interval, max_retries)` | Run exploit with auto-retry and VM restart on crash |
 | `vm_start()` / `vm_stop()` / `vm_restart()` | VM lifecycle via controller HTTP API |
+| `vm_get_log(lines)` | Get recent QEMU console output for diagnosing boot/SSH failures |
+| `vm_reset_overlay()` | Stop VM + delete overlay for fresh boot (kernelCTF only) |
 
 ### CVE registry (`cve-registry.json`)
 

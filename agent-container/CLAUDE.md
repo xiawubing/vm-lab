@@ -26,6 +26,8 @@ You have these tools via the `vm-ssh` MCP server:
 | `vm_start()` | Start the VM (waits for SSH ready) |
 | `vm_stop()` | Stop the VM |
 | `vm_restart()` | Restart the VM after a crash |
+| `vm_get_log(lines)` | Get recent QEMU console output (diagnose boot/SSH failures) |
+| `vm_reset_overlay()` | Delete VM overlay for a fresh boot (kernelCTF only) |
 
 ## Compilation
 
@@ -101,6 +103,14 @@ Report what you achieved:
 - What exploitation technique you used
 - How many iterations it took
 - Any interesting observations about the kernel behavior
+
+## Troubleshooting SSH Failures
+
+If `vm_check_status()` shows the VM is unreachable:
+1. **Check console output first**: Call `vm_get_log()` to see what the VM is doing — kernel panic, init errors, or networking issues will be visible
+2. **Try restart**: Call `vm_restart()` — this stops and restarts the VM, waiting for SSH
+3. **Reset overlay**: If SSH fails after multiple restarts, call `vm_reset_overlay()` to delete the corrupted overlay and get a clean boot
+4. **Do NOT blindly retry** `vm_restart()` more than 2-3 times — always check `vm_get_log()` to understand WHY SSH isn't working
 
 ## Tips
 
