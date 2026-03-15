@@ -44,7 +44,6 @@ if [ "${AGENT}" = "shell" ]; then
 else
     echo "Starting Claude Code agent..."
     cd /workspace
-    mkdir -p /workspace/logs/code
 
     # Stream filter produces both terminal output and Markdown log
     claude -p --model claude-sonnet-4-6 --dangerously-skip-permissions \
@@ -55,7 +54,17 @@ else
 
     echo ""
     echo "=== Session logs ==="
-    echo "  Markdown log:  $(ls -t /workspace/logs/session_*.md 2>/dev/null | head -1)"
-    echo "  Code versions: /workspace/logs/code/"
-    ls -la /workspace/logs/code/ 2>/dev/null | grep -v "^total" | grep -v "^d" || echo "  (no code generated)"
+    LATEST_LOG="$(ls -t /workspace/logs/session_*.md 2>/dev/null | head -1)"
+    echo "  Markdown log: ${LATEST_LOG:-none}"
+    # Find matching code dir (same session tag as latest log)
+    if [ -n "$LATEST_LOG" ]; then
+        SESSION_TAG="$(basename "$LATEST_LOG" .md | sed 's/^session_//')"
+        SESSION_CODE="/workspace/logs/code/${SESSION_TAG}"
+        if [ -d "$SESSION_CODE" ]; then
+            echo "  Code dir:     ${SESSION_CODE}/"
+            ls -la "$SESSION_CODE"/ 2>/dev/null | grep -v "^total" | grep -v "^d" || echo "  (no code generated)"
+        else
+            echo "  (no code generated)"
+        fi
+    fi
 fi

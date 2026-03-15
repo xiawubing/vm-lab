@@ -209,19 +209,26 @@ if [ -n "$LATEST_MD" ]; then
     fi
 fi
 
-# List code iterations
-CODE_FILES=$(ls "$LOG_DIR/code"/*_v*.c 2>/dev/null)
-if [ -n "$CODE_FILES" ]; then
-    echo "  Code iterations:"
-    for f in $CODE_FILES; do
-        echo "    $(basename "$f")  ($(wc -l < "$f") lines)"
-    done
-    LATEST_CODE=$(ls -t "$LOG_DIR/code"/*_latest.c 2>/dev/null | head -1)
-    if [ -n "$LATEST_CODE" ]; then
+# List code iterations from this session's code directory
+if [ -n "$LATEST_MD" ]; then
+    SESSION_TAG="$(basename "$LATEST_MD" .md | sed 's/^session_//')"
+    SESSION_CODE="$LOG_DIR/code/$SESSION_TAG"
+    CODE_FILES=$(ls "$SESSION_CODE"/*_v*.c 2>/dev/null)
+    if [ -n "$CODE_FILES" ]; then
+        echo "  Code iterations:"
+        for f in $CODE_FILES; do
+            echo "    $(basename "$f")  ($(wc -l < "$f") lines)"
+        done
+        LATEST_CODE=$(ls -t "$SESSION_CODE"/*_latest.c 2>/dev/null | head -1)
+        if [ -n "$LATEST_CODE" ]; then
+            echo ""
+            echo "  Latest code: $LATEST_CODE"
+        fi
         echo ""
-        echo "  Latest code: $LATEST_CODE"
+    else
+        echo "  Code iterations: (none)"
+        echo ""
     fi
-    echo ""
 fi
 
 echo "  SSH:  ssh -p ${SSH_PORT} ${SSH_USER}@127.0.0.1"

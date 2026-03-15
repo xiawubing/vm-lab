@@ -48,12 +48,13 @@ parser.add_argument("--cve", default=os.environ.get("CVE_ID", "unknown"))
 args, _ = parser.parse_known_args()
 
 LOG_DIR  = Path(args.log_dir)
-CODE_DIR = LOG_DIR / "code"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-CODE_DIR.mkdir(parents=True, exist_ok=True)
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-MD_LOG   = LOG_DIR / f"session_{args.cve}_{timestamp}.md"
+session_tag = f"{args.cve}_{timestamp}"
+CODE_DIR = LOG_DIR / "code" / session_tag
+CODE_DIR.mkdir(parents=True, exist_ok=True)
+MD_LOG   = LOG_DIR / f"session_{session_tag}.md"
 
 # ── State ────────────────────────────────────────────────────────────────
 _last_msg_id = None
