@@ -137,7 +137,7 @@ fi
 
 # Best-effort shell patching (init.sh privilege escalation monitor is the primary mechanism)
 # Match: execve("/bin/sh"), split /bin/sh in variable, or system("cat /flag")
-if [ -f "$SCRIPT_DIR/exp/exploit.c" ] && grep -qE 'execve.*(/bin/sh|/bin/bash)|/bin/(ba)?sh|system\s*\(.*(/bin/sh|cat.*/flag)' "$SCRIPT_DIR/exp/exploit.c"; then
+if [ -f "$SCRIPT_DIR/exp/exploit.c" ] && grep -qE 'exec[lv][ep]?\s*\(.*(/bin/(ba)?sh|"(ba)?sh")|/bin/(ba)?sh|system\s*\(.*(/bin/sh|cat.*/flag)' "$SCRIPT_DIR/exp/exploit.c"; then
     info "Patching shell-spawning function to read flag directly..."
     python3 "$SCRIPT_DIR/patches/patch_shell_spawn.py" "$SCRIPT_DIR/exp/exploit.c" 2>&1 || true
 fi
@@ -155,17 +155,27 @@ if [ -f Makefile ]; then
         COMPILED=true
     else
         warn "Makefile compilation failed"
+        # Try building prerequisites (e.g. libmnl, libnftnl) and retry
+        if grep -q '^prerequisites\|^libnftnl-build\|^libmnl-build' Makefile 2>/dev/null && [ ! -f exploit ]; then
+            info "Trying make prerequisites + make exploit..."
+            if timeout 180 make prerequisites </dev/null 2>&1 && timeout 120 make exploit </dev/null 2>&1; then
+                ok "Compilation with prerequisites succeeded"
+                COMPILED=true
+            else
+                warn "Compilation with prerequisites also failed"
+            fi
+        fi
         # Fallback: if Makefile failed but exploit.c exists, try simple gcc
         if [ -f exploit.c ] && [ ! -f exploit ]; then
             info "Trying fallback gcc compilation..."
             # Collect all .c files in current directory
             C_FILES=$(ls *.c 2>/dev/null | tr '\n' ' ')
-            if gcc -I. -o exploit $C_FILES -O0 -static -lpthread 2>&1; then
+            if gcc -I. -D_GNU_SOURCE -o exploit $C_FILES -O0 -static -lpthread 2>&1; then
                 ok "Fallback gcc compilation succeeded"
                 COMPILED=true
             else
                 # Try with just exploit.c
-                if gcc -I. -o exploit exploit.c -O0 -static -lpthread 2>&1; then
+                if gcc -I. -D_GNU_SOURCE -o exploit exploit.c -O0 -static -lpthread 2>&1; then
                     ok "Fallback single-file compilation succeeded"
                     COMPILED=true
                 fi
@@ -174,7 +184,7 @@ if [ -f Makefile ]; then
     fi
 elif [ -f exploit.c ]; then
     info "Compiling exploit.c..."
-    if gcc -I. -o exploit exploit.c -O0 -static -s 2>&1; then
+    if gcc -I. -D_GNU_SOURCE -o exploit exploit.c -O0 -static -s 2>&1; then
         ok "Compilation succeeded"
         COMPILED=true
     else
@@ -195,6 +205,15 @@ fi
 
 chmod +x "$SCRIPT_DIR/exp/exploit"
 ok "Exploit binary ready: $(file "$SCRIPT_DIR/exp/exploit" | cut -d: -f2 | xargs)"
+
+# Compile shell_trap (bind-mounted over /bin/sh in VM to intercept post-exploit shell spawns)
+info "Compiling shell_trap..."
+if gcc -static -O0 -o "$SCRIPT_DIR/exp/shell_trap" "$SCRIPT_DIR/patches/shell_trap.c" 2>&1; then
+    chmod +x "$SCRIPT_DIR/exp/shell_trap"
+    ok "shell_trap ready"
+else
+    warn "shell_trap compilation failed — relying on source patch + PEM only"
+fi
 
 # --- Step 2 & 3: Generate flag, launch VM (with retries) ---
 

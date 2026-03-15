@@ -286,6 +286,19 @@ def handle_tool_result(content: str, tool_id: str = ""):
         md(f"```\n{_md_truncate(content, 2000)}\n```\n\n")
         return
 
+    # Detect flag verification
+    if "FLAG_VERIFIED" in content:
+        tprint(f"\n  {BG_GREEN}{BOLD} ★ FLAG VERIFIED ★ {RESET}")
+        tprint(f"{GREEN}{content}{RESET}")
+        md(f"**Result**: **FLAG_VERIFIED** — Root privilege escalation confirmed\n\n")
+        md(f"```\n{_md_truncate(content, 500)}\n```\n\n")
+        return
+
+    if "FLAG_INCORRECT" in content:
+        tprint(f"  {RED}[FLAG INCORRECT]{RESET} {content.strip()}")
+        md(f"**Result**: FLAG_INCORRECT\n\n")
+        return
+
     # Detect exploit results
     if "SUCCESS" in content:
         tprint(f"\n  {BG_GREEN}{BOLD} ★ EXPLOIT SUCCESS ★ {RESET}")

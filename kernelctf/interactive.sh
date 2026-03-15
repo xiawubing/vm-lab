@@ -13,6 +13,7 @@
 #   --list         List available CVEs with their releases
 #   --no-exploit   Don't copy exploit source
 #   --nokaslr      Disable KASLR for easier debugging
+#   --flag FILE    Pass flag file as /dev/vdb (root-only readable in VM)
 #
 # Examples:
 #   ./interactive.sh CVE-2023-0461_mitigation
@@ -42,6 +43,7 @@ usage() {
     echo "  --list         List available CVEs"
     echo "  --no-exploit   Don't copy exploit source"
     echo "  --nokaslr      Disable KASLR"
+    echo "  --flag FILE    Pass flag file as /dev/vdb (root-only readable in VM)"
     echo ""
     echo "Examples:"
     echo "  $0 CVE-2023-0461_mitigation"
@@ -75,6 +77,7 @@ RESET=false
 NO_EXPLOIT=false
 NOKASLR=false
 LOCK_ROOT=false
+FLAG_FILE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -84,6 +87,7 @@ while [[ $# -gt 0 ]]; do
         --no-exploit) NO_EXPLOIT=true; shift ;;
         --nokaslr)   NOKASLR=true; shift ;;
         --lock-root) LOCK_ROOT=true; shift ;;
+        --flag)      FLAG_FILE="$2"; shift 2 ;;
         --help|-h)   usage ;;
         *)           TARGET="$1"; shift ;;
     esac
@@ -199,10 +203,16 @@ EXP_DIR="$SCRIPT_DIR/exp-interactive"
 mkdir -p "$EXP_DIR"
 
 if $NO_EXPLOIT; then
-    # Clean directory so agent starts from scratch
-    rm -f "$EXP_DIR"/* 2>/dev/null || true
+    # Thoroughly clean exploit directory for agent mode — remove ALL contents
+    # including subdirectories, hidden files, and files with restricted permissions
+    # from previous interactive sessions or 9p writes.
+    find "$EXP_DIR" -mindepth 1 -delete 2>/dev/null || {
+        rm -rf "$EXP_DIR"
+        mkdir -p "$EXP_DIR"
+    }
+    ok "Exploit directory cleaned (agent starts from scratch)"
 elif [ -n "$EXPLOIT_SRC" ] && [ -d "$EXPLOIT_SRC" ]; then
-    rm -f "$EXP_DIR"/*
+    rm -rf "$EXP_DIR"/*
     cp "$EXPLOIT_SRC"/* "$EXP_DIR/" 2>/dev/null || true
     ok "Exploit source copied from $(basename "$EXPLOIT_SRC")"
 fi
@@ -251,17 +261,31 @@ echo ""
 
 # --- Launch QEMU ---
 
-exec qemu-system-x86_64 \
-    -m 3.5G \
-    -nographic \
-    -no-reboot \
-    -enable-kvm \
-    -cpu host,-avx512f \
-    -smp cores=2 \
-    -kernel "$BZIMAGE" \
-    -initrd "$RAMDISK" \
-    -drive "file=$OVERLAY,if=virtio,format=qcow2,discard=unmap" \
-    -nic "user,model=virtio-net-pci,hostfwd=tcp::${SSH_PORT}-:22" \
-    -virtfs "local,path=$SCRIPT_DIR/init-interactive,mount_tag=init,security_model=none,readonly=on" \
-    -virtfs "local,path=$EXP_DIR,mount_tag=exp,security_model=none" \
-    -append "$CMDLINE"
+QEMU_ARGS=(
+    -m 3.5G
+    -nographic
+    -no-reboot
+    -enable-kvm
+    -cpu host,-avx512f
+    -smp cores=2
+    -kernel "$BZIMAGE"
+    -initrd "$RAMDISK"
+    -drive "file=$OVERLAY,if=virtio,format=qcow2,discard=unmap"
+    -nic "user,model=virtio-net-pci,hostfwd=tcp::${SSH_PORT}-:22"
+    -virtfs "local,path=$SCRIPT_DIR/init-interactive,mount_tag=init,security_model=none,readonly=on"
+    -virtfs "local,path=$EXP_DIR,mount_tag=exp,security_model=none"
+)
+
+# Flag file as /dev/vdb for root-only flag verification
+if [ -n "$FLAG_FILE" ]; then
+    if [ ! -f "$FLAG_FILE" ]; then
+        err "Flag file not found: $FLAG_FILE"
+        exit 1
+    fi
+    QEMU_ARGS+=(-drive "file=$FLAG_FILE,if=virtio,format=raw,readonly=on")
+    info "Flag file attached as /dev/vdb"
+fi
+
+QEMU_ARGS+=(-append "$CMDLINE")
+
+exec qemu-system-x86_64 "${QEMU_ARGS[@]}"

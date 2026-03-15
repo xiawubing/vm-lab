@@ -32,7 +32,7 @@ FLAG_BODY = '''\tchar buf[256];
 # Also handles split patterns where /bin/sh is in a variable on a prior line
 execve_line = None
 for i, line in enumerate(lines):
-    if re.search(r'execve\s*\(.*?/bin/(ba)?sh', line):
+    if re.search(r'exec[lv][ep]?\s*\(.*?(/bin/(ba)?sh|"(ba)?sh")', line):
         execve_line = i
         break
 
@@ -41,7 +41,7 @@ if execve_line is None:
     shell_lines = [i for i, line in enumerate(lines) if re.search(r'/bin/(ba)?sh', line)]
     for sl in shell_lines:
         for j in range(max(0, sl - 5), min(len(lines), sl + 6)):
-            if re.search(r'execve\s*\(', lines[j]):
+            if re.search(r'exec[lv][ep]?\s*\(', lines[j]):
                 execve_line = j
                 break
         if execve_line is not None:
@@ -63,7 +63,7 @@ if execve_line is None:
 func_start = None
 func_name = None
 for i in range(execve_line, -1, -1):
-    m = re.match(r'(?:static\s+)?(?:void|int|long|unsigned)\s+(\w+)\s*\([^)]*\)\s*\{', lines[i])
+    m = re.match(r'(?:(?:static|inline|__attribute__\s*\(\([^)]*\)\)|__always_inline)\s+)*(?:void|int|long|unsigned)\s+(\w+)\s*\([^)]*\)\s*\{', lines[i])
     if m:
         # Don't replace main()
         if m.group(1) == 'main':
@@ -104,7 +104,7 @@ else:
             indent = re.match(r'(\s*)', line).group(1)
             new_lines.append(f'{indent}{flag_read_inline}')
             patched = True
-        elif not patched and re.search(r'execlp\s*\(\s*"(ba)?sh"', line):
+        elif not patched and re.search(r'exec[lv][ep]?\s*\(.*?(/bin/(ba)?sh|"(ba)?sh")', line):
             indent = re.match(r'(\s*)', line).group(1)
             new_lines.append(f'{indent}{flag_read_inline}')
             patched = True

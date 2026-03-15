@@ -160,8 +160,9 @@ for e in baseline['entries']:
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
 
-    # Determine result
-    if grep -q "SUCCESS\|flag captured\|root shell" "$LOG_FILE" 2>/dev/null; then
+    # Determine result: check for cryptographic flag verification first,
+    # fall back to log keyword matching
+    if grep -q "FLAG_VERIFIED" "$LOG_FILE" 2>/dev/null; then
         STATUS="success"
         PASS=$((PASS + 1))
     elif [ $EXIT_CODE -eq 124 ]; then

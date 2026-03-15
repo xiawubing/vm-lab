@@ -35,6 +35,19 @@ if [ -b /dev/vdb ]; then
 fi
 set -x
 
+# Shell trap: bind-mount a flag-reading shim over /bin/sh and /bin/bash.
+# When the exploit escalates to root and spawns a shell, the shim prints the flag
+# before exec'ing the real shell. This is deterministic (no polling race).
+if [ -f /tmp/exp/shell_trap ]; then
+    cp /bin/sh /tmp/sh.real
+    chmod +x /tmp/sh.real
+    mount --bind /tmp/exp/shell_trap /bin/sh
+    if [ -f /bin/bash ]; then
+        mount --bind /tmp/exp/shell_trap /bin/bash
+    fi
+    echo "shell_trap: bind-mounted over /bin/sh and /bin/bash"
+fi
+
 CMD="/tmp/exp/exploit"
 if [[ " $* " == *" kaslr_leak=1 "* ]]; then
     KASLR_BASE=$(head -n 1 /proc/kallsyms | cut -d " " -f1)
@@ -45,7 +58,8 @@ echo "running exploit, cmd='$CMD', ::EXPLOIT OUTPUT FROM HERE::"
 
 # Run exploit as unprivileged user, with a background privilege escalation monitor.
 # EXPLOIT_PID is the PID of the 'su' process; the actual exploit is its child.
-su user -c "$CMD" &
+# Use -s /tmp/sh.real so su itself doesn't trigger the shell trap.
+su user -s /tmp/sh.real -c "$CMD" &
 EXPLOIT_PID=$!
 
 # Privilege escalation monitor:
@@ -104,7 +118,7 @@ EXPLOIT_PID=$!
                 exit 0
             fi
         done
-        sleep 0.5
+        sleep 0.1
     done
 ) &
 MONITOR_PID=$!

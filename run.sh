@@ -127,6 +127,14 @@ else
     KERNEL_SRC_PATH=""
 fi
 
+# Generate flag for benchmark verification (kernelCTF mode only)
+FLAG_FILE=""
+if [ "$BOOT_MODE" = "kernelctf" ]; then
+    FLAG_FILE="$(mktemp /tmp/kctf-flag-XXXXXX)"
+    echo -n "kernelCTF{$(cat /proc/sys/kernel/random/uuid)}" > "$FLAG_FILE"
+    echo "[+] Flag generated for benchmark verification"
+fi
+
 # 1. Start VM controller in background (kills any existing one first)
 if pgrep -f "vm_controller.py" >/dev/null 2>&1; then
     echo "[*] Stopping existing VM controller..."
@@ -135,7 +143,7 @@ if pgrep -f "vm_controller.py" >/dev/null 2>&1; then
 fi
 
 echo "[*] Starting VM controller for $CVE_ID..."
-python3 "$SCRIPT_DIR/vm_controller.py" --cve "$CVE_ID" &
+python3 "$SCRIPT_DIR/vm_controller.py" --cve "$CVE_ID" ${FLAG_FILE:+--flag-file "$FLAG_FILE"} &
 CONTROLLER_PID=$!
 sleep 1
 
@@ -144,6 +152,8 @@ cleanup() {
     echo "[*] Stopping VM controller (pid $CONTROLLER_PID)..."
     kill $CONTROLLER_PID 2>/dev/null
     wait $CONTROLLER_PID 2>/dev/null
+    # Clean up flag file
+    [ -n "$FLAG_FILE" ] && rm -f "$FLAG_FILE"
 }
 trap cleanup EXIT
 

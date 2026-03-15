@@ -34,6 +34,17 @@ if cat /proc/cmdline | tr ' ' '\n' | grep -q '^lockroot=1$'; then
     LOCK_ROOT=true
 fi
 
+# --- Extract flag from /dev/vdb (benchmark mode) ---
+# Flag file is passed as a virtio block device by interactive.sh --flag.
+# Write to /tmp/flag with chmod 400 root:root so only euid=0 can read it.
+if [ -b /dev/vdb ]; then
+    FLAG_CONTENT=$(dd if=/dev/vdb bs=512 count=1 2>/dev/null | tr -d '\0')
+    if [ -n "$FLAG_CONTENT" ]; then
+        (umask 177; echo -n "$FLAG_CONTENT" > /tmp/flag)
+        echo "[+] Flag installed at /tmp/flag (root-only readable)"
+    fi
+fi
+
 # --- Copy dropbear from 9p mount (do this EARLY, before anything might disturb /tmp) ---
 INIT_9P="/tmp/init"
 if [ -x "$INIT_9P/dropbear" ]; then
@@ -178,11 +189,11 @@ else
     echo "[!] Run kernelctf/setup.sh to build dropbear"
 fi
 
-# --- Exploit source ---
+# --- Exploit workspace ---
 mkdir -p /home/user/exploit
 mount -t 9p exp /home/user/exploit -o trans=virtio 2>/dev/null && \
-    echo "[+] Exploit source at /home/user/exploit/" || \
-    echo "[!] No exploit source mounted"
+    echo "[+] Exploit workspace at /home/user/exploit/ (writable)" || \
+    echo "[!] No exploit workspace mounted"
 chown -R user:user /home/user 2>/dev/null
 
 # --- Ready ---

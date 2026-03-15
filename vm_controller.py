@@ -32,6 +32,7 @@ VM_DIR = Path.home() / "vm-lab"
 VM_SCRIPT = ""
 BOOT_MODE = "cloud-init"   # "cloud-init" or "kernelctf"
 RELEASE = ""                # kernelCTF release name (e.g. "mitigation-6.1-v2")
+FLAG_FILE = ""              # optional flag file path for benchmark verification
 QEMU_PROCESS_NAME = "qemu-system-x86_64"
 SSH_PORT = 0
 SSH_USER = "ubuntu"
@@ -122,7 +123,10 @@ def _start_vm() -> str:
             if not script_path.exists():
                 return f"interactive.sh not found: {script_path}"
             cmd = ["bash", str(script_path), RELEASE,
-                   "--port", str(SSH_PORT), "--no-exploit", "--lock-root"]
+                   "--port", str(SSH_PORT), "--no-exploit", "--lock-root",
+                   "--reset"]
+            if FLAG_FILE:
+                cmd += ["--flag", FLAG_FILE]
         else:
             # cloud-init mode: use vm-scripts/
             script_path = VM_DIR / VM_SCRIPT
@@ -284,6 +288,28 @@ class VMHandler(BaseHTTPRequestHandler):
             msg = _reset_overlay()
             self._send_json(200, {"message": msg})
 
+        elif self.path == "/verify-flag":
+            if not FLAG_FILE:
+                self._send_json(200, {"verified": False, "message": "No flag configured"})
+                return
+            # Read POST body for candidate flag
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode() if content_length else ""
+            try:
+                candidate = json.loads(body).get("flag", "")
+            except (json.JSONDecodeError, AttributeError):
+                candidate = body.strip()
+            # Compare against the flag file on disk
+            try:
+                expected = Path(FLAG_FILE).read_text().strip()
+            except FileNotFoundError:
+                self._send_json(200, {"verified": False, "message": "Flag file not found"})
+                return
+            if candidate.strip() == expected:
+                self._send_json(200, {"verified": True, "message": "FLAG_VERIFIED"})
+            else:
+                self._send_json(200, {"verified": False, "message": "FLAG_INCORRECT"})
+
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -321,10 +347,14 @@ def main():
     parser.add_argument("--cve", type=str, required=True, help="CVE ID (e.g. CVE-2017-6074)")
     parser.add_argument("--port", type=int, default=8222)
     parser.add_argument("--vm-dir", type=str, default=str(VM_DIR))
+    parser.add_argument("--flag-file", type=str, default="",
+                        help="Flag file path for benchmark verification")
     args = parser.parse_args()
 
     VM_DIR = Path(args.vm_dir)
     _load_cve_config(args.cve, VM_DIR)
+    global FLAG_FILE
+    FLAG_FILE = args.flag_file
 
     server = HTTPServer(("0.0.0.0", args.port), VMHandler)
     print(f"[vm-controller] CVE: {args.cve}")
