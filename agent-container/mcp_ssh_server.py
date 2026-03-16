@@ -129,7 +129,9 @@ def _upload_via_ssh(client: paramiko.SSHClient, local_path: str, remote_path: st
     exit_code = stdout.channel.recv_exit_status()
     if exit_code != 0:
         err_msg = stderr.read().decode().strip()
-        raise OSError(f"base64 decode failed (exit {exit_code}): {err_msg}")
+        # Use RuntimeError, NOT OSError — OSError is in _SSH_ERRORS and would
+        # be misreported as "VM crashed" by the calling MCP tools
+        raise RuntimeError(f"base64 decode failed (exit {exit_code}): {err_msg}")
 
 
 def _download_via_ssh(client: paramiko.SSHClient, remote_path: str, local_path: str) -> None:
@@ -145,6 +147,67 @@ def _download_via_ssh(client: paramiko.SSHClient, remote_path: str, local_path: 
     data = base64.b64decode(encoded)
     with open(local_path, "wb") as f:
         f.write(data)
+
+
+def _upload_file(local_path: str, remote_path: str) -> str:
+    """Upload a file to the VM. Tries SFTP, falls back to base64-over-SSH.
+
+    On Dropbear or other minimal SSH servers, open_sftp() fails with
+    SSHException which can corrupt the pooled connection.  We catch ALL
+    SFTP errors, reset the pool, open a fresh connection, and retry via
+    the base64 pipe.  Only if the fresh connection also fails do we let
+    _SSH_ERRORS propagate (meaning the VM is truly unreachable).
+
+    Raises:
+        _SSH_ERRORS: VM is unreachable.
+        FileNotFoundError: local_path does not exist.
+        RuntimeError: base64 decode failed on the VM side.
+    """
+    if not os.path.isfile(local_path):
+        raise FileNotFoundError(f"Local file not found: {local_path}")
+
+    client = _get_ssh()
+
+    # --- try SFTP first ---
+    try:
+        sftp = client.open_sftp()
+        sftp.put(local_path, remote_path)
+        sftp.close()
+        return f"Uploaded {local_path} -> {remote_path}"
+    except Exception:
+        # SFTP unavailable (Dropbear, channel error, etc.) — fall through
+        pass
+
+    # SFTP failed — the pooled connection may be corrupted, so reset it
+    _reset_ssh()
+    client = _get_ssh()          # raises _SSH_ERRORS if VM is truly down
+    _upload_via_ssh(client, local_path, remote_path)
+    return f"Uploaded {local_path} -> {remote_path} (via base64, SFTP unavailable)"
+
+
+def _download_file(remote_path: str, local_path: str) -> str:
+    """Download a file from the VM. Tries SFTP, falls back to base64-over-SSH.
+
+    Same SFTP-then-base64 pattern as _upload_file.
+
+    Raises:
+        _SSH_ERRORS: VM is unreachable.
+        FileNotFoundError: remote file not found.
+    """
+    client = _get_ssh()
+
+    try:
+        sftp = client.open_sftp()
+        sftp.get(remote_path, local_path)
+        sftp.close()
+        return f"Downloaded {remote_path} -> {local_path}"
+    except Exception:
+        pass
+
+    _reset_ssh()
+    client = _get_ssh()
+    _download_via_ssh(client, remote_path, local_path)
+    return f"Downloaded {remote_path} -> {local_path} (via base64, SFTP unavailable)"
 
 
 @mcp.tool()
@@ -202,23 +265,14 @@ def vm_upload_file(local_path: str, remote_path: str) -> str:
         Success message or error details.
     """
     try:
-        client = _get_ssh()
-        try:
-            sftp = client.open_sftp()
-            sftp.put(local_path, remote_path)
-            sftp.close()
-            return f"Uploaded {local_path} -> {remote_path}"
-        except _SSH_ERRORS:
-            raise
-        except Exception:
-            # SFTP subsystem unavailable — fall back to base64-over-SSH
-            _upload_via_ssh(client, local_path, remote_path)
-            return f"Uploaded {local_path} -> {remote_path} (via ssh fallback)"
+        return _upload_file(local_path, remote_path)
+    except FileNotFoundError:
+        return f"Local file not found: {local_path}"
     except _SSH_ERRORS as e:
         _reset_ssh()
         return _ssh_error_message(e)
-    except FileNotFoundError:
-        return f"Local file not found: {local_path}"
+    except RuntimeError as e:
+        return f"Upload failed: {e}"
 
 
 @mcp.tool()
@@ -235,23 +289,14 @@ def vm_download_file(remote_path: str, local_path: str) -> str:
         Success message or error details.
     """
     try:
-        client = _get_ssh()
-        try:
-            sftp = client.open_sftp()
-            sftp.get(remote_path, local_path)
-            sftp.close()
-            return f"Downloaded {remote_path} -> {local_path}"
-        except _SSH_ERRORS:
-            raise
-        except Exception:
-            # SFTP subsystem unavailable — fall back to base64-over-SSH
-            _download_via_ssh(client, remote_path, local_path)
-            return f"Downloaded {remote_path} -> {local_path} (via ssh fallback)"
+        return _download_file(remote_path, local_path)
+    except FileNotFoundError:
+        return f"Remote file not found: {remote_path}"
     except _SSH_ERRORS as e:
         _reset_ssh()
         return _ssh_error_message(e)
-    except FileNotFoundError:
-        return f"Remote file not found: {remote_path}"
+    except RuntimeError as e:
+        return f"Download failed: {e}"
 
 
 @mcp.tool()
@@ -295,26 +340,22 @@ def vm_compile_and_run(
         return f"Failed to write source file: {e}"
 
     try:
-        client = _get_ssh()
-        try:
-            sftp = client.open_sftp()
-            sftp.put(src_path, remote_src)
-            sftp.close()
-        except _SSH_ERRORS:
-            raise
-        except Exception:
-            # SFTP unavailable — fall back to base64-over-SSH
-            _upload_via_ssh(client, src_path, remote_src)
+        _upload_file(src_path, remote_src)
+    except FileNotFoundError:
+        return f"Failed to write source file: {src_path} not found"
     except _SSH_ERRORS as e:
+        _reset_ssh()
         return _ssh_error_message(e)
-    except Exception as e:
+    except (RuntimeError, Exception) as e:
         return f"[upload failed: {e}]"
 
     output = f"[uploaded {filename} to {remote_src}]\n"
 
-    # Compile on VM with native gcc
+    # Compile on VM with native gcc — get a fresh client in case
+    # _upload_file reset the pool during SFTP fallback
     gcc_cmd = f"gcc {compile_flags} -o {remote_bin} {remote_src}"
     try:
+        client = _get_ssh()
         _, stdout, stderr = client.exec_command(gcc_cmd, timeout=60)
         gcc_out = stdout.read().decode()
         gcc_err = stderr.read().decode()

@@ -65,6 +65,7 @@ COPY --chown=agent:agent mcp_ssh_server.py /app/mcp_ssh_server.py
 COPY --chown=agent:agent cve-info/ /app/cve-info/
 COPY --chown=agent:agent .mcp.json /workspace/.mcp.json
 COPY --chown=agent:agent CLAUDE.md /workspace/CLAUDE.md
+COPY --chown=agent:agent .claude/skills/ /workspace/.claude/skills/
 COPY --chown=agent:agent stream_filter.py /app/stream_filter.py
 COPY --chown=agent:agent entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

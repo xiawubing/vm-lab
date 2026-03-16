@@ -16,6 +16,7 @@ services:
       - VM_SSH_PASSWORD=${VM_SSH_PASSWORD:-ubuntu}
       - VM_CONTROLLER_URL=http://host.docker.internal:8222
       - AGENT=${AGENT:-}
+      - AGENT_BUDGET=${AGENT_BUDGET:-}
       - BOOT_MODE=${BOOT_MODE:-}
     volumes:
       - ../agent-logs:/workspace/logs
