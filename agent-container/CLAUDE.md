@@ -66,6 +66,53 @@ All source files and binaries MUST use the `agent_` prefix (e.g., `agent_exploit
 - **Write a minimal crash trigger first** — a program that triggers the bug (kernel oops/panic) is far more valuable than a perfect mental model.
 - **Iterate from VM feedback, not from theory.** Compile, run, read dmesg, adjust. This loop is faster and cheaper than extended reasoning.
 - **Never spend more than 2 consecutive thinking steps without a tool action** (write code, compile, run command, etc.). If you catch yourself planning for too long, stop and write code.
+- **NEVER reason from scratch when a skill exists.** You have kernel exploitation skills that contain complete technique references, code templates, and exploitation patterns. Invoke the matching skill FIRST, then use its output to write code. Spending thinking tokens to re-derive what a skill already provides is the single biggest budget waste.
+
+## Mandatory Skill Usage
+
+**You MUST invoke skills using the Skill tool before reasoning about exploitation strategy.** Skills contain complete technique references, code templates, slab cache tables, ROP chain patterns, and page feng shui recipes extracted from 100 kernelCTF submissions. Using a skill costs almost nothing; re-deriving the same knowledge from scratch costs 10-50x more budget.
+
+### Start Here: The Index Skill
+
+**ALWAYS invoke `kernel-exploit-index` first.** It contains:
+- Decision tree: "I have vulnerability type X → which techniques do I need?"
+- Technique dependency graph showing the correct ordering
+- CVE × technique cross-reference matrix
+- Common exploit flows (nftables UAF → ROP, page UAF → dirty pagetable, arb write → core_pattern, etc.)
+
+### When to Invoke Each Skill
+
+| Workflow Step | Required Skill(s) | Trigger Condition |
+|---|---|---|
+| Step 2 (strategy planning) | `kernel-exploit-index` | **ALWAYS** — invoke first to select technique chain |
+| Step 3 (KASLR bypass) | `kernel-exploit-entrybleed-kaslr-bypass` | When kernel < 6.2 and no info leak from the vuln itself |
+| Step 4 (heap spray) | `kernel-exploit-heap-spray-family` | When reclaiming a freed slab object (UAF, double-free, OOB) |
+| Step 4 (page feng shui) | `kernel-exploit-page-feng-shui` | When controlling physical page adjacency (pipe drain, pg_vec, PTE spray) |
+| Step 4 (cross-cache) | `kernel-exploit-cross-cache-attack` | When the vuln object is in a dedicated kmem_cache |
+| Step 4 (dirty pagetable) | `kernel-exploit-dirty-pagetable` | When you have a page-level UAF (pipe, io_uring, TLS) |
+| Step 5 (code execution) | `kernel-exploit-rop-chain-commit-creds` | When you have a control-flow hijack (corrupted func ptr) |
+| Step 5 (payload staging) | `kernel-exploit-cpu-entry-area-payload` | When you need a fake struct at a KASLR-independent address (kernel < 6.4) |
+| Step 5 (privesc) | `kernel-exploit-core-pattern-privesc` | When you have an arbitrary kernel write primitive |
+
+### Skill Quick Reference
+
+| Skill Name | What It Provides | CVEs Using It |
+|---|---|---|
+| `kernel-exploit-index` | Master decision tree, technique dependency graph, CVE × technique matrix | — |
+| `kernel-exploit-entrybleed-kaslr-bypass` | EntryBleed (CVE-2022-4543) prefetch timing side-channel, Intel + AMD variants | 24 |
+| `kernel-exploit-heap-spray-family` | 4 spray primitives (setxattr, add_key, msg_msg, sk_buff), size formulas, decision table | 50+ |
+| `kernel-exploit-page-feng-shui` | Pipe buffer drain, pg_vec (AF_PACKET TPACKET_V3), alloc_pages_via_sock | 17+ |
+| `kernel-exploit-cross-cache-attack` | 6-phase bracket drain, slab→buddy→target reclaim, pagealloc_pad, xfrm flush | 15 |
+| `kernel-exploit-dirty-pagetable` | Page UAF → PTE reclaim, physmap leak, PTE craft for arb phys read/write | 7 |
+| `kernel-exploit-rop-chain-commit-creds` | Stack pivot, commit_creds chain, namespace escape, KPTI trampoline return | 62+ |
+| `kernel-exploit-cpu-entry-area-payload` | Stage fake structs at fixed VA via #DE/#UD exception on CEA stack (kernel < 6.4) | 17 |
+| `kernel-exploit-core-pattern-privesc` | Overwrite core_pattern, memfd+dup2 payload, crash trigger, root handler | 26 |
+
+### How to Invoke
+
+Use the Skill tool: `skill: "kernel-exploit-index"` (with optional args).
+
+**Anti-pattern (NEVER DO THIS):** Spending 3+ thinking steps reasoning about "what heap spray object should I use for kmalloc-256" or "how do I build a ROP chain" when `kernel-exploit-heap-spray-family` and `kernel-exploit-rop-chain-commit-creds` already have the answer. Invoke the skill, read the output, write code.
 
 ## Step-by-Step Workflow
 
@@ -79,11 +126,15 @@ Read `/app/cve-info/${CVE_DIR}.md` (or `/app/cve-info/${CVE_ID}.md`) AND call `v
 
 If VM is unreachable, call `vm_start()`.
 
-### Step 2: Read key source files (2-3 files max)
+### Step 2: Read key source files + invoke index skill
 The exact kernel source is at `/src/`. Read **only** the most critical files identified by the patch commit:
 - The vulnerable function(s)
 - The fix diff (this reveals the exact bug)
 - Key data structures if unclear
+
+**REQUIRED:** After reading the source, invoke `kernel-exploit-index` skill to select your technique chain. The index contains decision trees that map vulnerability type → required techniques → skill invocation order. Do NOT reason about exploitation approach from scratch.
+
+Then invoke the specific technique skills the index recommends (e.g., `kernel-exploit-heap-spray-family` for UAF reclaim, `kernel-exploit-dirty-pagetable` for page UAF, etc.).
 
 Do NOT read more than 3-5 files. You can always read more later if needed.
 
@@ -91,14 +142,21 @@ Do NOT read more than 3-5 files. You can always read more later if needed.
 **This is the most important step. Do it quickly.** Based on what you've read so far:
 - Write the simplest C program that triggers the vulnerable code path
 - It does NOT need to achieve privilege escalation yet — just trigger the bug
+- Use code patterns from the relevant technique skills (e.g., `kernel-exploit-heap-spray-family` has spray templates, `kernel-exploit-page-feng-shui` has pipe drain + pg_vec patterns)
 - Compile with `gcc -static -I/src/include/uapi -I/src/arch/x86/include/uapi`, upload to VM, run it
 - Check `dmesg` for kernel oops/panic output
 
 ### Step 4: Iterate toward exploitation
 Only now, based on actual VM feedback, plan the full exploit:
-- Identify the corruption primitive (UAF, double-free, OOB, etc.)
-- Plan heap layout / object replacement if needed
-- Consider KASLR/SMEP/SMAP and how to deal with them
+- Identify the corruption primitive (UAF, double-free, OOB, page UAF, etc.)
+- **REQUIRED:** Invoke technique skills matching your primitive:
+  - Slab UAF/OOB → `kernel-exploit-heap-spray-family` for spray object selection
+  - Dedicated cache → `kernel-exploit-cross-cache-attack` for cache-to-buddy-to-target reclaim
+  - Page-level UAF → `kernel-exploit-dirty-pagetable` for PTE reclaim and arb phys read/write
+  - Physical page adjacency needed → `kernel-exploit-page-feng-shui` for pipe drain + pg_vec placement
+  - KASLR bypass (kernel < 6.2) → `kernel-exploit-entrybleed-kaslr-bypass`
+  - Control-flow hijack → `kernel-exploit-rop-chain-commit-creds` + `kernel-exploit-cpu-entry-area-payload` (kernel < 6.4)
+  - Arbitrary write → `kernel-exploit-core-pattern-privesc` for core_pattern overwrite + memfd payload
 - Check if user namespaces are available (`unshare -Urn`)
 
 ### Step 5: Write PoC source code
