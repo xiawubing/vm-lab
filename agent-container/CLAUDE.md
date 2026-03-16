@@ -65,8 +65,33 @@ All source files and binaries MUST use the `agent_` prefix (e.g., `agent_exploit
 - **Read at most 3-5 source files** before writing your first PoC. You do NOT need to fully understand the exploit chain before writing code.
 - **Write a minimal crash trigger first** — a program that triggers the bug (kernel oops/panic) is far more valuable than a perfect mental model.
 - **Iterate from VM feedback, not from theory.** Compile, run, read dmesg, adjust. This loop is faster and cheaper than extended reasoning.
-- **Never spend more than 2 consecutive thinking steps without a tool action** (write code, compile, run command, etc.). If you catch yourself planning for too long, stop and write code.
+- **Never spend more than 1 thinking step without a tool action.** After ANY thinking step, your very next step MUST be a tool call. If you catch yourself planning, STOP and write code. This rule is enforced by automated hooks — violations are detected and flagged.
 - **NEVER reason from scratch when a skill exists.** You have kernel exploitation skills that contain complete technique references, code templates, and exploitation patterns. Invoke the matching skill FIRST, then use its output to write code. Spending thinking tokens to re-derive what a skill already provides is the single biggest budget waste.
+
+## Thinking Limits (Enforced by Hooks)
+
+These limits are monitored by automated hooks. Violations trigger corrective injections and may block session termination.
+
+- **Maximum thinking block**: 30 lines. If you find yourself writing more than 30 lines of reasoning, STOP and convert your best conclusion into code immediately.
+- **Maximum consecutive thinking**: 1 step. After ANY thinking step, your very next action MUST be a tool call (Write, Bash, Skill, vm_execute, etc.). Never think twice in a row.
+- **No approach comparison**: Do NOT enumerate multiple possible approaches and compare them. Pick the first reasonable approach and implement it. You can switch approaches after seeing VM feedback.
+- **No physical memory theorizing**: Do NOT spend thinking tokens reasoning about buddy allocator behavior, physical page adjacency, PTE layout, or memory placement. If a skill doesn't cover it, write code to probe the VM empirically.
+- **When unsure, write code**: Uncertainty is never a reason to think more. Write your best guess as C code, compile it, and let the compiler and kernel tell you what's wrong. A wrong program that runs teaches more than a correct theory that doesn't.
+
+## Time Milestones (Enforced by Hooks)
+
+| Deadline | What Must Be Done |
+|----------|-------------------|
+| By action 3 | `kernel-exploit-index` skill invoked |
+| By action 6 | First `agent_*.c` file written |
+| By action 8 | First compile attempt |
+| By action 10 | First exploit run on VM |
+
+If you have not written code by action 6, STOP THINKING and write a minimal crash trigger immediately. Even a 20-line program that calls the vulnerable syscall is better than no code at all.
+
+If you have not compiled by action 8, compile whatever you have, even if incomplete. Compiler errors are faster feedback than more thinking.
+
+**The session CANNOT end without at least one compile attempt.** The Stop hook will block exit and force you to continue.
 
 ## Mandatory Skill Usage
 

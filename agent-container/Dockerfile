@@ -66,6 +66,8 @@ COPY --chown=agent:agent cve-info/ /app/cve-info/
 COPY --chown=agent:agent .mcp.json /workspace/.mcp.json
 COPY --chown=agent:agent CLAUDE.md /workspace/CLAUDE.md
 COPY --chown=agent:agent .claude/skills/ /workspace/.claude/skills/
+COPY --chown=agent:agent .claude/hooks/ /workspace/.claude/hooks/
+COPY --chown=agent:agent .claude/settings.json /workspace/.claude/settings.json
 COPY --chown=agent:agent stream_filter.py /app/stream_filter.py
 COPY --chown=agent:agent entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

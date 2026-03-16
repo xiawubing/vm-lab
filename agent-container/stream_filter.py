@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import sys
+import time as _time_module
 from datetime import datetime
 from pathlib import Path
 
@@ -98,6 +99,9 @@ _time_flag_captured = None
 _flag_verified = False
 _flag_incorrect_attempts = 0
 
+# Real-time monitoring
+_last_tool_timestamp = _time_module.time()
+
 
 def tprint(*a, **kw):
     """Print to terminal with flush."""
@@ -171,6 +175,30 @@ def handle_thinking(text: str):
     _consecutive_thinking += 1
     _max_consecutive_thinking = max(_max_consecutive_thinking, _consecutive_thinking)
 
+    # ── Real-time overthinking warnings (terminal + log only, cannot influence agent) ──
+    if nlines > 50:
+        tprint(f"\n{BG_RED}{BOLD} OVERTHINKING {RESET} "
+               f"{RED}Thinking block: {nlines} lines — "
+               f"budget consumed on reasoning instead of code{RESET}")
+
+    if _consecutive_thinking >= 3:
+        tprint(f"\n{BG_RED}{BOLD} BUDGET VIOLATION {RESET} "
+               f"{RED}{_consecutive_thinking} consecutive thinking steps "
+               f"without a tool action{RESET}")
+
+    thinking_gap = _time_module.time() - _last_tool_timestamp
+    if thinking_gap > 120:
+        gap_min = int(thinking_gap // 60)
+        gap_sec = int(thinking_gap % 60)
+        tprint(f"\n{BG_RED}{BOLD} THINKING GAP {RESET} "
+               f"{RED}{gap_min}m{gap_sec}s since last tool action{RESET}")
+
+    if _time_first_code is None:
+        elapsed_secs = (datetime.now() - _start_time).total_seconds()
+        if elapsed_secs > 300:
+            tprint(f"\n{BG_RED}{BOLD} NO CODE {RESET} "
+                   f"{RED}{int(elapsed_secs // 60)}+ minutes elapsed with no code written{RESET}")
+
     preview = lines[:THINKING_PREVIEW]
     preview_text = "\n".join(f"    {l}" for l in preview)
     if nlines > THINKING_PREVIEW:
@@ -180,6 +208,11 @@ def handle_thinking(text: str):
 
     n = step("thinking")
     md(f"### Step {n} — Thinking [{elapsed()}]\n\n")
+    # Log warnings in markdown too
+    if nlines > 50:
+        md(f"**OVERTHINKING WARNING**: {nlines}-line thinking block at [{elapsed()}]\n\n")
+    if _consecutive_thinking >= 3:
+        md(f"**BUDGET VIOLATION**: {_consecutive_thinking} consecutive thinking steps at [{elapsed()}]\n\n")
     md(f"<details>\n<summary>Agent reasoning ({nlines} lines)</summary>\n\n")
     md(f"```\n{text.strip()}\n```\n\n")
     md(f"</details>\n\n")
@@ -187,8 +220,9 @@ def handle_thinking(text: str):
 
 def _action_taken():
     """Reset consecutive thinking counter — an action (tool call) happened."""
-    global _consecutive_thinking
+    global _consecutive_thinking, _last_tool_timestamp
     _consecutive_thinking = 0
+    _last_tool_timestamp = _time_module.time()
 
 
 def _track_mcp(tool_name: str):
@@ -570,6 +604,14 @@ def handle_tool_use(block: dict):
             v_str = v_str[:150] + "..."
         args_str += f"\n    {k}: {v_str}"
     tprint(f"\n{YELLOW}[Tool]{RESET} {BOLD}{name}{RESET}{args_str}")
+
+    # ── Periodic status (every 5 steps) ──
+    if _step_num > 0 and _step_num % 5 == 0:
+        action_count = max(_step_num - _thinking_steps, 1)
+        ratio = f"{(_thinking_steps / action_count):.1f}"
+        tprint(f"\n{DIM}[STATUS {elapsed()}] Steps: {_step_num} | "
+               f"Think/Act: {ratio} | Code: {_iteration} | "
+               f"Compiles: {_compile_attempts}{RESET}")
 
 
 # ── Main loop ────────────────────────────────────────────────────────────
