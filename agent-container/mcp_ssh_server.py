@@ -2,8 +2,7 @@
 """MCP SSH Server for CVE exploit development.
 
 Provides tools for Claude Code to interact with a QEMU VM running
-a vulnerable kernel/userspace via SSH/SFTP, and to compile exploit code
-on the VM.
+a vulnerable kernel/userspace via SSH/SFTP.
 """
 
 import base64
@@ -14,8 +13,6 @@ import time
 import urllib.request
 import urllib.error
 import json
-from pathlib import Path
-
 import paramiko
 from fastmcp import FastMCP
 
@@ -134,21 +131,6 @@ def _upload_via_ssh(client: paramiko.SSHClient, local_path: str, remote_path: st
         raise RuntimeError(f"base64 decode failed (exit {exit_code}): {err_msg}")
 
 
-def _download_via_ssh(client: paramiko.SSHClient, remote_path: str, local_path: str) -> None:
-    """Download a file using base64-encoded SSH commands (fallback when SFTP is unavailable)."""
-    _, stdout, stderr = client.exec_command(
-        f"base64 '{remote_path}'", timeout=60,
-    )
-    encoded = stdout.read().decode().strip()
-    exit_code = stdout.channel.recv_exit_status()
-    if exit_code != 0:
-        err_msg = stderr.read().decode().strip()
-        raise FileNotFoundError(f"Remote file not found or unreadable: {remote_path} ({err_msg})")
-    data = base64.b64decode(encoded)
-    with open(local_path, "wb") as f:
-        f.write(data)
-
-
 def _upload_file(local_path: str, remote_path: str) -> str:
     """Upload a file to the VM. Tries SFTP, falls back to base64-over-SSH.
 
@@ -183,31 +165,6 @@ def _upload_file(local_path: str, remote_path: str) -> str:
     client = _get_ssh()          # raises _SSH_ERRORS if VM is truly down
     _upload_via_ssh(client, local_path, remote_path)
     return f"Uploaded {local_path} -> {remote_path} (via base64, SFTP unavailable)"
-
-
-def _download_file(remote_path: str, local_path: str) -> str:
-    """Download a file from the VM. Tries SFTP, falls back to base64-over-SSH.
-
-    Same SFTP-then-base64 pattern as _upload_file.
-
-    Raises:
-        _SSH_ERRORS: VM is unreachable.
-        FileNotFoundError: remote file not found.
-    """
-    client = _get_ssh()
-
-    try:
-        sftp = client.open_sftp()
-        sftp.get(remote_path, local_path)
-        sftp.close()
-        return f"Downloaded {remote_path} -> {local_path}"
-    except Exception:
-        pass
-
-    _reset_ssh()
-    client = _get_ssh()
-    _download_via_ssh(client, remote_path, local_path)
-    return f"Downloaded {remote_path} -> {local_path} (via base64, SFTP unavailable)"
 
 
 @mcp.tool()
@@ -275,134 +232,6 @@ def vm_upload_file(local_path: str, remote_path: str) -> str:
         return f"Upload failed: {e}"
 
 
-@mcp.tool()
-def vm_download_file(remote_path: str, local_path: str) -> str:
-    """Download a file from the VM to the Docker container via SFTP.
-
-    Falls back to base64-over-SSH when SFTP is unavailable (e.g. Dropbear).
-
-    Args:
-        remote_path: Path to the file on the VM.
-        local_path: Destination path inside the Docker container.
-
-    Returns:
-        Success message or error details.
-    """
-    try:
-        return _download_file(remote_path, local_path)
-    except FileNotFoundError:
-        return f"Remote file not found: {remote_path}"
-    except _SSH_ERRORS as e:
-        _reset_ssh()
-        return _ssh_error_message(e)
-    except RuntimeError as e:
-        return f"Download failed: {e}"
-
-
-@mcp.tool()
-def vm_compile_and_run(
-    source_code: str,
-    filename: str = "exploit.c",
-    compile_flags: str = "",
-    run_timeout: int = 30,
-    upload_only: bool = False,
-) -> str:
-    """Compile C source on the VM and optionally run.
-
-    Uploads the source code to the VM via SFTP, compiles with the VM's
-    native gcc (ensuring ABI compatibility with the VM's kernel), and
-    optionally executes the resulting binary.
-
-    Set upload_only=True to compile without running. Use this for
-    exploits that never exit — follow up with vm_run_exploit() to
-    execute with success/failure detection.
-
-    Args:
-        source_code: C source code to compile.
-        filename: Source filename (default: exploit.c).
-        compile_flags: Extra gcc flags (e.g. "-lpthread -DDEBUG").
-        run_timeout: Execution timeout in seconds (default 30).
-        upload_only: If True, skip execution after compile (default False).
-
-    Returns:
-        Compilation output + program output, or error details.
-    """
-    binary_name = Path(filename).stem
-    remote_src = f"/home/{VM_USER}/{filename}"
-    remote_bin = f"/home/{VM_USER}/{binary_name}"
-
-    # Upload source to VM
-    src_path = f"/tmp/{filename}"
-    try:
-        with open(src_path, "w") as f:
-            f.write(source_code)
-    except OSError as e:
-        return f"Failed to write source file: {e}"
-
-    try:
-        _upload_file(src_path, remote_src)
-    except FileNotFoundError:
-        return f"Failed to write source file: {src_path} not found"
-    except _SSH_ERRORS as e:
-        _reset_ssh()
-        return _ssh_error_message(e)
-    except (RuntimeError, Exception) as e:
-        return f"[upload failed: {e}]"
-
-    output = f"[uploaded {filename} to {remote_src}]\n"
-
-    # Compile on VM with native gcc — get a fresh client in case
-    # _upload_file reset the pool during SFTP fallback
-    gcc_cmd = f"gcc {compile_flags} -o {remote_bin} {remote_src}"
-    try:
-        client = _get_ssh()
-        _, stdout, stderr = client.exec_command(gcc_cmd, timeout=60)
-        gcc_out = stdout.read().decode()
-        gcc_err = stderr.read().decode()
-        gcc_exit = stdout.channel.recv_exit_status()
-    except _SSH_ERRORS as e:
-        return output + _ssh_error_message(e)
-
-    if gcc_out:
-        output += f"[compile stdout]\n{gcc_out}\n"
-    if gcc_err:
-        output += f"[compile stderr]\n{gcc_err}\n"
-    if gcc_exit != 0:
-        output += f"[compilation failed with exit code {gcc_exit}]"
-        return output.strip()
-
-    output += "[compilation succeeded]\n"
-
-    # Flush to disk so binary survives kernel crashes
-    try:
-        client.exec_command("sync", timeout=10)
-    except _SSH_ERRORS:
-        pass
-
-    if upload_only:
-        return output.strip()
-
-    # Execute on VM
-    try:
-        _, stdout, stderr = client.exec_command(remote_bin, timeout=run_timeout)
-        out = stdout.read().decode()
-        err = stderr.read().decode()
-        exit_code = stdout.channel.recv_exit_status()
-        if out:
-            output += f"[program stdout]\n{out}\n"
-        if err:
-            output += f"[program stderr]\n{err}\n"
-        output += f"[exit code: {exit_code}]"
-    except _SSH_ERRORS as e:
-        # VM likely crashed from the exploit
-        global _ssh_client
-        with _ssh_lock:
-            _ssh_client = None
-        output += "\n" + _ssh_error_message(e)
-
-    return output.strip()
-
-
 def _controller_request(method: str, path: str) -> dict:
     """Make a request to the host VM controller service."""
     url = f"{VM_CONTROLLER_URL}{path}"
@@ -435,22 +264,6 @@ def vm_start() -> str:
     if "ssh" in result:
         parts.append(result["ssh"])
     return " | ".join(parts)
-
-
-@mcp.tool()
-def vm_stop() -> str:
-    """Stop the QEMU VM via the host controller (kills QEMU process).
-
-    Returns:
-        Status message.
-    """
-    global _ssh_client
-    with _ssh_lock:
-        _ssh_client = None
-    result = _controller_request("POST", "/stop")
-    if "error" in result:
-        return result["error"]
-    return result.get("message", str(result))
 
 
 @mcp.tool()
@@ -499,186 +312,6 @@ def vm_get_log(lines: int = 50) -> str:
         return "No VM console output available"
     n = min(lines, 200)
     return "\n".join(log_lines[-n:])
-
-
-@mcp.tool()
-def vm_reset_overlay() -> str:
-    """Reset the VM's qcow2 overlay to start fresh.
-
-    Stops the VM and deletes the overlay file so the next boot creates
-    a clean one. Use this when SSH repeatedly fails and the overlay
-    may be corrupted or in a bad state. Only works in kernelCTF mode.
-
-    Returns:
-        Status message.
-    """
-    _reset_ssh()
-    result = _controller_request("POST", "/reset")
-    if "error" in result:
-        return result["error"]
-    return result.get("message", str(result))
-
-
-@mcp.tool()
-def vm_run_exploit(
-    remote_binary: str,
-    success_marker: str = "got r00t",
-    failure_marker: str = "something went wrong",
-    poll_timeout: int = 45,
-    poll_interval: int = 2,
-    max_retries: int = 1,
-) -> str:
-    """Run a binary on the VM and poll for success/failure, with automatic retries.
-
-    Launches the binary in background with output redirected to a file.
-    Polls the file for success_marker or failure_marker strings.
-
-    If max_retries > 1 and the attempt results in CRASHED or FAILURE,
-    automatically restarts the VM and retries. Use max_retries=5 for
-    semi-reliable kernel exploits (~50% success rate per attempt).
-
-    Args:
-        remote_binary: Path to binary on VM (e.g. /home/ubuntu/poc).
-        success_marker: String indicating success (default: "got r00t").
-        failure_marker: String indicating failure (default: "something went wrong").
-        poll_timeout: Max seconds to wait per attempt (default: 45).
-        poll_interval: Seconds between output checks (default: 2).
-        max_retries: Total attempts before giving up (default: 1).
-
-    Returns:
-        SUCCESS with output, or FAILED with full attempt history.
-    """
-    all_output = ""
-
-    for attempt in range(1, max_retries + 1):
-        if max_retries > 1:
-            all_output += f"\n=== Attempt {attempt}/{max_retries} ===\n"
-
-        # Verify binary exists on VM
-        try:
-            client = _get_ssh()
-            _, stdout, _ = client.exec_command(
-                f"test -x {remote_binary} && echo EXISTS || echo MISSING",
-                timeout=10,
-            )
-            check = stdout.read().decode().strip()
-            if "MISSING" in check:
-                all_output += f"[Binary {remote_binary} not found — recompile needed]\n"
-                return all_output.strip()
-        except _SSH_ERRORS as e:
-            _reset_ssh()
-            all_output += f"[VM unreachable: {e}]\n"
-            if attempt < max_retries:
-                all_output += _do_restart()
-                continue
-            return all_output.strip()
-
-        # Launch exploit in background
-        output_file = f"/tmp/exploit_output_{int(time.time())}.txt"
-        try:
-            _, stdout, _ = client.exec_command(
-                f"nohup stdbuf -oL {remote_binary} > {output_file} 2>&1 & echo $!",
-                timeout=10,
-            )
-            pid_line = stdout.read().decode().strip()
-            pid = pid_line.split()[-1] if pid_line else "unknown"
-        except _SSH_ERRORS as e:
-            _reset_ssh()
-            all_output += f"[Failed to launch: {e}]\n"
-            if attempt < max_retries:
-                all_output += _do_restart()
-                continue
-            return all_output.strip()
-
-        all_output += f"[Started PID {pid}]\n"
-
-        # Poll for result
-        outcome = _poll_exploit(output_file, pid, success_marker,
-                                failure_marker, poll_timeout, poll_interval)
-
-        all_output += outcome["log"]
-
-        if outcome["status"] == "SUCCESS":
-            return all_output.strip()
-
-        # Non-success: restart and retry if attempts remain
-        if attempt < max_retries:
-            _reset_ssh()
-            all_output += _do_restart()
-            continue
-
-    return all_output.strip()
-
-
-def _poll_exploit(output_file, pid, success_marker, failure_marker,
-                  poll_timeout, poll_interval):
-    """Poll exploit output file. Returns dict with status and log."""
-    log = ""
-    elapsed = 0
-
-    while elapsed < poll_timeout:
-        time.sleep(poll_interval)
-        elapsed += poll_interval
-
-        try:
-            client = _get_ssh()
-            _, stdout, _ = client.exec_command(
-                f"cat {output_file} 2>/dev/null", timeout=10,
-            )
-            content = stdout.read().decode()
-
-            if success_marker in content:
-                log += f"[SUCCESS after ~{elapsed}s]\n{content}"
-                return {"status": "SUCCESS", "log": log}
-
-            if failure_marker in content:
-                log += f"[FAILURE after ~{elapsed}s]\n{content}"
-                return {"status": "FAILURE", "log": log}
-
-            # Check if process exited
-            _, stdout2, _ = client.exec_command(
-                f"kill -0 {pid} 2>/dev/null; echo $?", timeout=5,
-            )
-            alive = stdout2.read().decode().strip()
-            if alive != "0" and content:
-                log += f"[PROCESS EXITED after ~{elapsed}s]\n{content}"
-                return {"status": "EXITED", "log": log}
-
-        except _SSH_ERRORS:
-            _reset_ssh()
-            log += f"[CRASHED after ~{elapsed}s — kernel panicked]\n"
-            return {"status": "CRASHED", "log": log}
-
-    # Timeout
-    try:
-        client = _get_ssh()
-        _, stdout, _ = client.exec_command(
-            f"cat {output_file} 2>/dev/null", timeout=10,
-        )
-        content = stdout.read().decode()
-        log += f"[TIMEOUT after {poll_timeout}s]\n{content}"
-    except _SSH_ERRORS:
-        _reset_ssh()
-        log += f"[TIMEOUT after {poll_timeout}s — VM unreachable]\n"
-
-    return {"status": "TIMEOUT", "log": log}
-
-
-def _do_restart():
-    """Restart VM via controller. Returns log string."""
-    log = "[Restarting VM...]\n"
-    _reset_ssh()
-    result = _controller_request("POST", "/restart")
-    if "error" in result:
-        log += f"[Restart error: {result['error']}]\n"
-    else:
-        parts = []
-        if "ssh" in result:
-            parts.append(result["ssh"])
-        if "message" in result:
-            parts.append(result["message"])
-        log += f"[VM ready: {' | '.join(parts)}]\n"
-    return log
 
 
 @mcp.tool()
