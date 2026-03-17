@@ -65,6 +65,7 @@ All source files and binaries MUST use the `agent_` prefix (e.g., `agent_exploit
 - **Read at most 3-5 source files** before writing your first PoC. You do NOT need to fully understand the exploit chain before writing code.
 - **Write a minimal crash trigger first** — a program that triggers the bug (kernel oops/panic) is far more valuable than a perfect mental model.
 - **Iterate from VM feedback, not from theory.** Compile, run, read dmesg, adjust. This loop is faster and cheaper than extended reasoning.
+- **Test hypotheses empirically.** When you have a theory about the bug, write a 15-line C probe and run it on the VM (~10 seconds). Never spend more than 5 lines reasoning about whether something works — test it.
 - **Never spend more than 1 thinking step without a tool action.** After ANY thinking step, your very next step MUST be a tool call. If you catch yourself planning, STOP and write code. This rule is enforced by automated hooks — violations are detected and flagged.
 - **NEVER reason from scratch when a skill exists.** You have kernel exploitation skills that contain complete technique references, code templates, and exploitation patterns. Invoke the matching skill FIRST, then use its output to write code. Spending thinking tokens to re-derive what a skill already provides is the single biggest budget waste.
 
@@ -74,9 +75,56 @@ These limits are monitored by automated hooks. Violations trigger corrective inj
 
 - **Maximum thinking block**: 30 lines. If you find yourself writing more than 30 lines of reasoning, STOP and convert your best conclusion into code immediately.
 - **Maximum consecutive thinking**: 1 step. After ANY thinking step, your very next action MUST be a tool call (Write, Bash, Skill, vm_execute, etc.). Never think twice in a row.
-- **No approach comparison**: Do NOT enumerate multiple possible approaches and compare them. Pick the first reasonable approach and implement it. You can switch approaches after seeing VM feedback.
-- **No physical memory theorizing**: Do NOT spend thinking tokens reasoning about buddy allocator behavior, physical page adjacency, PTE layout, or memory placement. If a skill doesn't cover it, write code to probe the VM empirically.
-- **When unsure, write code**: Uncertainty is never a reason to think more. Write your best guess as C code, compile it, and let the compiler and kernel tell you what's wrong. A wrong program that runs teaches more than a correct theory that doesn't.
+- **When uncertain about the vulnerability mechanism**: see "Hypothesis-Driven Testing" below. Do NOT reason about it — write a probe and test on the VM.
+
+## Hypothesis-Driven Testing (CRITICAL)
+
+When you form a hypothesis about the vulnerability mechanism, you MUST test it empirically
+on the VM — not by reasoning. The VM is the oracle.
+
+**Rule**: After forming a hypothesis, you have exactly TWO choices:
+1. >80% confident → write exploit code directly
+2. <80% confident → write a 10-30 line C probe, compile, upload, run on VM
+
+There is NO third option. You may NOT reason further about the hypothesis. A 10-line probe
+that returns EFAULT in 10 seconds is worth more than 200 lines of theorizing.
+
+**Probe template**:
+```c
+// agent_probe_<hypothesis>.c — test ONE thing, print result, exit
+#include <stdio.h>
+#include <errno.h>
+// ... minimal includes
+int main() {
+    // Set up the SPECIFIC condition you're testing
+    int ret = syscall(...);
+    printf("result=%d errno=%d (%s)\n", ret, errno, strerror(errno));
+    return 0;
+}
+```
+
+**If a probe returns failure → immediately abandon that hypothesis.** Do not reason about
+why it failed. Move to the next hypothesis and probe it.
+
+### Anti-patterns from real sessions
+
+These are actual overthinking episodes that wasted 25+ minutes of budget:
+
+| Hypothesis | What the agent DID (wrong) | What it SHOULD have done |
+|------------|---------------------------|-------------------------|
+| "THP compound_head bypasses the contiguity check" | 63-line thinking block theorizing about compound page internals | 15-line probe: allocate THP, call io_uring_setup with entries=128, check return value |
+| "page_to_virt returns huge page base, not user offset" | 64-line thinking block re-deriving the same theory | 10-line probe: mmap at offset within huge page, call io_uring_setup, check if ring data appears at offset 0 |
+| "Can same memfd page be mapped 3x contiguously?" | Found last after cycling through 4 other theories | 10-line probe: create memfd, ftruncate(4096), mmap same page 3x with MAP_FIXED, try io_uring_setup |
+
+### Generic probe patterns
+
+| Question type | Probe approach |
+|--------------|---------------|
+| "Does syscall X accept flag Y?" | Call it, check errno |
+| "Does this memory layout trigger a crash?" | Set up layout, trigger syscall, check dmesg |
+| "Can I map the same page N times?" | mmap with MAP_FIXED, verify addresses |
+| "Does the kernel write OOB here?" | Place canary values after buffer, check corruption |
+| "Is struct field at offset N?" | Write known value, read back at expected offset |
 
 ## Time Milestones (Enforced by Hooks)
 
@@ -105,39 +153,23 @@ If you have not compiled by action 8, compile whatever you have, even if incompl
 - CVE × technique cross-reference matrix
 - Common exploit flows (nftables UAF → ROP, page UAF → dirty pagetable, arb write → core_pattern, etc.)
 
-### When to Invoke Each Skill
+### Skill Reference
 
-| Workflow Step | Required Skill(s) | Trigger Condition |
-|---|---|---|
-| Step 2 (strategy planning) | `kernel-exploit-index` | **ALWAYS** — invoke first to select technique chain |
-| Step 3 (KASLR bypass) | `kernel-exploit-entrybleed-kaslr-bypass` | When kernel < 6.2 and no info leak from the vuln itself |
-| Step 4 (heap spray) | `kernel-exploit-heap-spray-family` | When reclaiming a freed slab object (UAF, double-free, OOB) |
-| Step 4 (page feng shui) | `kernel-exploit-page-feng-shui` | When controlling physical page adjacency (pipe drain, pg_vec, PTE spray) |
-| Step 4 (cross-cache) | `kernel-exploit-cross-cache-attack` | When the vuln object is in a dedicated kmem_cache |
-| Step 4 (dirty pagetable) | `kernel-exploit-dirty-pagetable` | When you have a page-level UAF (pipe, io_uring, TLS) |
-| Step 5 (code execution) | `kernel-exploit-rop-chain-commit-creds` | When you have a control-flow hijack (corrupted func ptr) |
-| Step 5 (payload staging) | `kernel-exploit-cpu-entry-area-payload` | When you need a fake struct at a KASLR-independent address (kernel < 6.4) |
-| Step 5 (privesc) | `kernel-exploit-core-pattern-privesc` | When you have an arbitrary kernel write primitive |
-
-### Skill Quick Reference
-
-| Skill Name | What It Provides | CVEs Using It |
-|---|---|---|
-| `kernel-exploit-index` | Master decision tree, technique dependency graph, CVE × technique matrix | — |
-| `kernel-exploit-entrybleed-kaslr-bypass` | EntryBleed (CVE-2022-4543) prefetch timing side-channel, Intel + AMD variants | 24 |
-| `kernel-exploit-heap-spray-family` | 4 spray primitives (setxattr, add_key, msg_msg, sk_buff), size formulas, decision table | 50+ |
-| `kernel-exploit-page-feng-shui` | Pipe buffer drain, pg_vec (AF_PACKET TPACKET_V3), alloc_pages_via_sock | 17+ |
-| `kernel-exploit-cross-cache-attack` | 6-phase bracket drain, slab→buddy→target reclaim, pagealloc_pad, xfrm flush | 15 |
-| `kernel-exploit-dirty-pagetable` | Page UAF → PTE reclaim, physmap leak, PTE craft for arb phys read/write | 7 |
-| `kernel-exploit-rop-chain-commit-creds` | Stack pivot, commit_creds chain, namespace escape, KPTI trampoline return | 62+ |
-| `kernel-exploit-cpu-entry-area-payload` | Stage fake structs at fixed VA via #DE/#UD exception on CEA stack (kernel < 6.4) | 17 |
-| `kernel-exploit-core-pattern-privesc` | Overwrite core_pattern, memfd+dup2 payload, crash trigger, root handler | 26 |
+| Skill | When to Invoke | What It Provides | CVEs |
+|---|---|---|---|
+| `kernel-exploit-index` | **ALWAYS** — invoke first (Step 2) | Master decision tree, technique dependency graph, CVE × technique matrix | — |
+| `kernel-exploit-entrybleed-kaslr-bypass` | Kernel < 6.2, no info leak from vuln (Step 3) | EntryBleed prefetch timing side-channel, Intel + AMD variants | 24 |
+| `kernel-exploit-heap-spray-family` | Reclaiming freed slab object: UAF, double-free, OOB (Step 4) | 4 spray primitives (setxattr, add_key, msg_msg, sk_buff), size formulas, decision table | 50+ |
+| `kernel-exploit-page-feng-shui` | Controlling physical page adjacency (Step 4) | Pipe buffer drain, pg_vec (AF_PACKET TPACKET_V3), alloc_pages_via_sock | 17+ |
+| `kernel-exploit-cross-cache-attack` | Vuln object in dedicated kmem_cache (Step 4) | 6-phase bracket drain, slab→buddy→target reclaim, pagealloc_pad, xfrm flush | 15 |
+| `kernel-exploit-dirty-pagetable` | Page-level UAF: pipe, io_uring, TLS (Step 4) | Page UAF → PTE reclaim, physmap leak, PTE craft for arb phys read/write | 7 |
+| `kernel-exploit-rop-chain-commit-creds` | Control-flow hijack: corrupted func ptr (Step 5) | Stack pivot, commit_creds chain, namespace escape, KPTI trampoline return | 62+ |
+| `kernel-exploit-cpu-entry-area-payload` | Need fake struct at KASLR-independent addr, kernel < 6.4 (Step 5) | Stage fake structs at fixed VA via #DE/#UD exception on CEA stack | 17 |
+| `kernel-exploit-core-pattern-privesc` | Arbitrary kernel write primitive (Step 5) | Overwrite core_pattern, memfd+dup2 payload, crash trigger, root handler | 26 |
 
 ### How to Invoke
 
 Use the Skill tool: `skill: "kernel-exploit-index"` (with optional args).
-
-**Anti-pattern (NEVER DO THIS):** Spending 3+ thinking steps reasoning about "what heap spray object should I use for kmalloc-256" or "how do I build a ROP chain" when `kernel-exploit-heap-spray-family` and `kernel-exploit-rop-chain-commit-creds` already have the answer. Invoke the skill, read the output, write code.
 
 ## Step-by-Step Workflow
 
@@ -170,6 +202,9 @@ Do NOT read more than 3-5 files. You can always read more later if needed.
 - Use code patterns from the relevant technique skills (e.g., `kernel-exploit-heap-spray-family` has spray templates, `kernel-exploit-page-feng-shui` has pipe drain + pg_vec patterns)
 - Compile with `gcc -static -I/src/include/uapi -I/src/arch/x86/include/uapi`, upload to VM, run it
 - Check `dmesg` for kernel oops/panic output
+
+If the bug trigger mechanism is unclear, do NOT reason about it. Write a minimal probe
+(see "Hypothesis-Driven Testing") to test your best hypothesis. If it fails, try the next.
 
 ### Step 4: Iterate toward exploitation
 Only now, based on actual VM feedback, plan the full exploit:
@@ -249,7 +284,6 @@ If `vm_check_status()` shows the VM is unreachable:
 
 ## Tips
 
-- **Action over analysis**: a compiled-and-tested 50-line crash trigger teaches you more than 500 lines of reasoning. When in doubt, write code and run it.
 - Start with the simplest possible trigger — just crash the kernel to confirm the bug
 - Read the patch commit diff carefully — the fix shows exactly where the bug is
 - Use `dmesg` on the VM to see kernel messages after crashes
