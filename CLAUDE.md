@@ -65,7 +65,7 @@ vm-lab/
     │       └── Launches Claude Code with CVE-specific prompt
     │               │
     │               ├── Reads /app/cve-info/CVE-*.md
-    │               ├── Calls MCP tools (vm_execute, vm_compile_and_run, vm_run_exploit)
+    │               ├── Calls MCP tools (vm_execute, vm_upload_file, vm_verify_flag)
     │               │       │
     │               │       ├── SSH/SFTP to QEMU VM (paramiko)
     │               │       └── HTTP to vm_controller.py (start/stop/restart)
@@ -108,13 +108,10 @@ FastMCP server exposing these tools to the Claude Code agent inside Docker:
 |------|---------|
 | `vm_check_status()` | Get kernel version via SSH |
 | `vm_execute(command, timeout)` | Run shell command on VM |
-| `vm_upload_file(local, remote)` | SFTP upload to VM |
-| `vm_download_file(remote, local)` | SFTP download from VM |
-| `vm_compile_and_run(source_code, filename, compile_flags, run_timeout, upload_only)` | Compile C code on VM, optionally run |
-| `vm_run_exploit(binary, success_marker, failure_marker, poll_timeout, poll_interval, max_retries)` | Run exploit with auto-retry and VM restart on crash |
-| `vm_start()` / `vm_stop()` / `vm_restart()` | VM lifecycle via controller HTTP API |
+| `vm_upload_file(local, remote)` | Upload file to VM (SFTP with base64-over-SSH fallback) |
+| `vm_start()` / `vm_restart()` | VM lifecycle via controller HTTP API |
 | `vm_get_log(lines)` | Get recent QEMU console output for diagnosing boot/SSH failures |
-| `vm_reset_overlay()` | Stop VM + delete overlay for fresh boot (kernelCTF only) |
+| `vm_verify_flag(flag)` | Submit flag string to verify root privilege escalation |
 
 ### CVE registry (`cve-registry.json`)
 
@@ -288,7 +285,7 @@ rm ~/vm-lab/images/ubuntu-16.04-cve-2017-6074-working.img
 - Do NOT run untested exploit code as root — always test as unprivileged user first, privilege escalation is the exploit's job
 
 ### Agent container
-- Do NOT manually retry kernel exploits in agent logic — the MCP `vm_run_exploit` tool handles auto-retry and VM restart on crash
+- Do NOT blindly retry `vm_restart()` more than 2-3 times — check `vm_get_log()` first to understand WHY SSH isn't working
 - Do NOT use `apt` on CentOS VMs — use `yum`
 - Do NOT forget the `agent_` prefix for agent-created files
 
@@ -304,7 +301,7 @@ rm ~/vm-lab/images/ubuntu-16.04-cve-2017-6074-working.img
 - **VM hangs at boot**: check cloud-init `user-data` for YAML syntax errors first
 - **SSH connection refused after VM starts**: wait 30s — cloud-init may still be installing kernel packages and rebooting
 - **Exploit compiles but segfaults**: check kernel ASLR/SMEP/SMAP status (`cat /proc/cpuinfo | grep smep`, `cat /proc/sys/kernel/randomize_va_space`) before debugging the code
-- **VM kernel panic on exploit run**: this is expected for some exploits — use `vm_run_exploit` with `max_retries` to auto-restart and retry
+- **VM kernel panic on exploit run**: this is expected for some exploits — use `vm_restart()` to bring the VM back, then retry
 - **`genisoimage` not found**: run `./setup.sh --deps` to install host dependencies
 - **qcow2 overlay corrupted**: delete the overlay file in `images/` and reboot — it will be recreated from the base image
 

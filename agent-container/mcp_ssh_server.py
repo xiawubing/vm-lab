@@ -6,17 +6,66 @@ a vulnerable kernel/userspace via SSH/SFTP.
 """
 
 import base64
+import functools
+import logging
 import os
+import pathlib
 import socket
 import threading
 import time
 import urllib.request
 import urllib.error
 import json
+from datetime import datetime
 import paramiko
 from fastmcp import FastMCP
 
 mcp = FastMCP("vm-ssh")
+
+# ── Logging setup ────────────────────────────────────────────────────────
+_cve_id = os.environ.get("CVE_ID", "unknown")
+_session_tag = os.environ.get("SESSION_TAG") or f"{_cve_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+_log_dir = pathlib.Path(os.environ.get("MCP_LOG_DIR", "/workspace/logs"))
+_log_dir.mkdir(parents=True, exist_ok=True)
+_log_file = _log_dir / f"mcp_{_session_tag}.log"
+
+_logger = logging.getLogger("mcp_ssh")
+_logger.setLevel(logging.INFO)
+_fh = logging.FileHandler(_log_file)
+_fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+_logger.addHandler(_fh)
+
+# ── Sensitive field redaction ────────────────────────────────────────────
+_REDACT_KEYS = {"password", "flag", "ssh_password"}
+
+
+def _redact_args(args: dict) -> dict:
+    """Return a copy of args with sensitive values replaced by '***'."""
+    return {
+        k: "***" if k.lower() in _REDACT_KEYS else v
+        for k, v in args.items()
+    }
+
+
+def logged_tool(func):
+    """Decorator that logs MCP tool calls: name, args, duration, result, errors."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        name = func.__name__
+        redacted = _redact_args(kwargs) if kwargs else {}
+        _logger.info("CALL %s %s", name, json.dumps(redacted) if redacted else "")
+        t0 = time.monotonic()
+        try:
+            result = func(*args, **kwargs)
+            elapsed = time.monotonic() - t0
+            preview = str(result)[:2000]
+            _logger.info("OK   %s %.2fs %s", name, elapsed, preview)
+            return result
+        except Exception as exc:
+            elapsed = time.monotonic() - t0
+            _logger.error("FAIL %s %.2fs %s: %s", name, elapsed, type(exc).__name__, exc)
+            raise
+    return wrapper
 
 # VM connection config from environment
 VM_HOST = os.environ.get("VM_SSH_HOST", "host.docker.internal")
@@ -168,6 +217,7 @@ def _upload_file(local_path: str, remote_path: str) -> str:
 
 
 @mcp.tool()
+@logged_tool
 def vm_check_status() -> str:
     """Check VM SSH connectivity and return kernel version."""
     try:
@@ -180,6 +230,7 @@ def vm_check_status() -> str:
 
 
 @mcp.tool()
+@logged_tool
 def vm_execute(command: str, timeout: int = 30) -> str:
     """Run a command in the VM via SSH.
 
@@ -209,6 +260,7 @@ def vm_execute(command: str, timeout: int = 30) -> str:
 
 
 @mcp.tool()
+@logged_tool
 def vm_upload_file(local_path: str, remote_path: str) -> str:
     """Upload a file from the Docker container to the VM via SFTP.
 
@@ -248,6 +300,7 @@ def _controller_request(method: str, path: str) -> dict:
 
 
 @mcp.tool()
+@logged_tool
 def vm_start() -> str:
     """Start the QEMU VM via the host controller. Waits for SSH to become accessible.
 
@@ -267,6 +320,7 @@ def vm_start() -> str:
 
 
 @mcp.tool()
+@logged_tool
 def vm_restart() -> str:
     """Restart the QEMU VM: stop, then start, then wait for SSH.
 
@@ -292,6 +346,7 @@ def vm_restart() -> str:
 
 
 @mcp.tool()
+@logged_tool
 def vm_get_log(lines: int = 50) -> str:
     """Get recent QEMU console output for diagnosing boot/SSH failures.
 
@@ -315,6 +370,7 @@ def vm_get_log(lines: int = 50) -> str:
 
 
 @mcp.tool()
+@logged_tool
 def vm_verify_flag(flag: str) -> str:
     """Verify a flag string captured from the VM after privilege escalation.
 
@@ -351,4 +407,5 @@ def vm_verify_flag(flag: str) -> str:
 
 
 if __name__ == "__main__":
+    _logger.info("MCP server starting — CVE=%s VM=%s:%s log=%s", _cve_id, VM_HOST, VM_PORT, _log_file)
     mcp.run()

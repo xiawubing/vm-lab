@@ -51,8 +51,7 @@ args, _ = parser.parse_known_args()
 LOG_DIR  = Path(args.log_dir)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-session_tag = f"{args.cve}_{timestamp}"
+session_tag = os.environ.get("SESSION_TAG") or f"{args.cve}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 CODE_DIR = LOG_DIR / "code" / session_tag
 CODE_DIR.mkdir(parents=True, exist_ok=True)
 MD_LOG   = LOG_DIR / f"session_{session_tag}.md"

@@ -96,33 +96,37 @@ except Exception:
     WATCHDOG_PID=$!
 
     # Stream filter produces both terminal output and Markdown log
+    # tee saves the raw JSON stream for post-session replay/analysis
     # --effort medium: prevent analysis paralysis (runaway thinking without action)
     # Budget can be overridden via AGENT_BUDGET env var (default $5.00)
     BUDGET="${AGENT_BUDGET:-5.00}"
+    export SESSION_TAG="${CVE_ID}_$(date +%Y%m%d_%H%M%S)"
+    RAW_LOG="/workspace/logs/raw_${SESSION_TAG}.jsonl"
+    mkdir -p /workspace/logs
+
     claude -p --model claude-sonnet-4-6 --dangerously-skip-permissions \
         --effort medium \
         --max-budget-usd "$BUDGET" \
         --verbose --output-format stream-json \
         "You are testing ${CVE_ID}. Read CLAUDE.md, then /app/cve-info/${CVE_INFO_NAME}.md. Follow the workflow: check VM, invoke kernel-exploit-index skill, write code, compile, run, iterate. You MUST write your first agent_exploit.c within 5 minutes. Go." \
-        2>/dev/null | python3 /app/stream_filter.py --cve "${CVE_ID}" --log-dir /workspace/logs
+        2>/dev/null | tee "$RAW_LOG" | python3 /app/stream_filter.py --cve "${CVE_ID}" --log-dir /workspace/logs
 
     # Kill watchdog after claude exits
     kill $WATCHDOG_PID 2>/dev/null
     wait $WATCHDOG_PID 2>/dev/null
 
     echo ""
-    echo "=== Session logs ==="
-    LATEST_LOG="$(ls -t /workspace/logs/session_*.md 2>/dev/null | head -1)"
-    echo "  Markdown log: ${LATEST_LOG:-none}"
-    # Find matching code dir (same session tag as latest log)
-    if [ -n "$LATEST_LOG" ]; then
-        SESSION_TAG="$(basename "$LATEST_LOG" .md | sed 's/^session_//')"
-        SESSION_CODE="/workspace/logs/code/${SESSION_TAG}"
-        if [ -d "$SESSION_CODE" ]; then
-            echo "  Code dir:     ${SESSION_CODE}/"
-            ls -la "$SESSION_CODE"/ 2>/dev/null | grep -v "^total" | grep -v "^d" || echo "  (no code generated)"
-        else
-            echo "  (no code generated)"
-        fi
+    echo "=== Session logs (${SESSION_TAG}) ==="
+    SESSION_MD="/workspace/logs/session_${SESSION_TAG}.md"
+    SESSION_MCP="/workspace/logs/mcp_${SESSION_TAG}.log"
+    SESSION_CODE="/workspace/logs/code/${SESSION_TAG}"
+    echo "  Markdown log: ${SESSION_MD}$( [ -f "$SESSION_MD" ] || echo ' (missing)')"
+    echo "  Raw JSON log: ${RAW_LOG}"
+    echo "  MCP tool log: ${SESSION_MCP}$( [ -f "$SESSION_MCP" ] || echo ' (missing)')"
+    if [ -d "$SESSION_CODE" ]; then
+        echo "  Code dir:     ${SESSION_CODE}/"
+        ls -la "$SESSION_CODE"/ 2>/dev/null | grep -v "^total" | grep -v "^d" || echo "  (no code generated)"
+    else
+        echo "  (no code generated)"
     fi
 fi
