@@ -24,10 +24,10 @@ mcp = FastMCP("vm-ssh")
 
 # ── Logging setup ────────────────────────────────────────────────────────
 _cve_id = os.environ.get("CVE_ID", "unknown")
-_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+_session_tag = os.environ.get("SESSION_TAG") or f"{_cve_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 _log_dir = pathlib.Path(os.environ.get("MCP_LOG_DIR", "/workspace/logs"))
 _log_dir.mkdir(parents=True, exist_ok=True)
-_log_file = _log_dir / f"mcp_{_cve_id}_{_ts}.log"
+_log_file = _log_dir / f"mcp_{_session_tag}.log"
 
 _logger = logging.getLogger("mcp_ssh")
 _logger.setLevel(logging.INFO)
