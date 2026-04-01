@@ -15,10 +15,15 @@
 #   --nokaslr      Disable KASLR for easier debugging
 #   --flag FILE    Pass flag file as /dev/vdb (root-only readable in VM)
 #
+# Environment variables:
+#   QEMU_MEM=8G          Override default VM memory (default: 3.5G)
+#   EXTRA_CMDLINE="..."  Append extra kernel cmdline parameters
+#
 # Examples:
 #   ./interactive.sh CVE-2023-0461_mitigation
 #   ./interactive.sh mitigation-6.1-v2 --port 2251
 #   ./interactive.sh CVE-2023-0461_mitigation --nokaslr --reset
+#   QEMU_MEM=8G EXTRA_CMDLINE="kasan_multi_shot" ./interactive.sh mitigation-v4-6.6-kasan --nokaslr
 
 set -euo pipefail
 
@@ -44,6 +49,10 @@ usage() {
     echo "  --no-exploit   Don't copy exploit source"
     echo "  --nokaslr      Disable KASLR"
     echo "  --flag FILE    Pass flag file as /dev/vdb (root-only readable in VM)"
+    echo ""
+    echo "Environment variables:"
+    echo "  QEMU_MEM=8G          Override VM memory (default: 3.5G)"
+    echo "  EXTRA_CMDLINE=\"...\"   Append extra kernel cmdline params"
     echo ""
     echo "Examples:"
     echo "  $0 CVE-2023-0461_mitigation"
@@ -238,6 +247,11 @@ if $LOCK_ROOT; then
     CMDLINE="$CMDLINE lockroot=1"
 fi
 
+if [ -n "${EXTRA_CMDLINE:-}" ]; then
+    CMDLINE="$CMDLINE $EXTRA_CMDLINE"
+    info "Extra cmdline: $EXTRA_CMDLINE"
+fi
+
 # init=/init triggers rootfs's /init which mounts 9p 'init' tag and runs init.sh
 CMDLINE="$CMDLINE init=/init"
 
@@ -262,7 +276,7 @@ echo ""
 # --- Launch QEMU ---
 
 QEMU_ARGS=(
-    -m 3.5G
+    -m "${QEMU_MEM:-3.5G}"
     -nographic
     -no-reboot
     -enable-kvm
