@@ -34,6 +34,10 @@ def main():
     stop_block_count = state.get("stop_block_count", 0)
     stop_hook_active = event.get("stop_hook_active", False)
 
+    # 1. Flag verified → always allow stop
+    if state.get("flag_verified", False):
+        sys.exit(0)
+
     # Safeguard: if already in forced-continuation or blocked too many times, allow stop
     if stop_hook_active or stop_block_count >= 2:
         sys.exit(0)
