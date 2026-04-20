@@ -4,6 +4,42 @@ Newest entries at top. Keep each dated entry short — just enough to resume tom
 
 ---
 
+## 2026-04-20 — CVE-2025-38502 reproduced end-to-end
+
+**Phase 1 milestone:** vm-lab kernelctf harness verified working on a
+2025-era BPF LTS exploit. 45 minutes elapsed (including pre-flight).
+
+### Stage 0 pre-flight
+All four checks passed faster than planned because `~/security-research`
+was already cloned and all 34 LTS + COS releases were pre-downloaded.
+Only deviation: linux-6.6 source tree is at v6.6.135 (tip) not v6.6.95
+— chose Option 1 (aggressive) and skipped source alignment. Exploit
+doesn't need the source tree.
+
+### Stage 1 — run outcome
+- `./run.sh CVE-2025-38502_lts lts-6.6.95`, attempts 1-2 timed out at
+  ~115s each (**QEMU boot slow on WSL2**, not exploit issue), attempt 3
+  succeeded: VM up, exploit completed in **8s**
+- `get kernel_off : 0x10000000`, flag read, `uid=0`, clean exit code 0
+- Flag: `kernelCTF{e2e9b8e1-a5ec-4453-a604-51a6749a84e7}`
+
+### Lessons for future hunting
+1. vm-lab's kernelctf harness is production-ready for BPF exploits
+   — the shell_trap bind-mount + 9p exp mount + /dev/vdb flag pipe
+   just works. No special setup for BPF required.
+2. **Budget 3× QEMU boot time** in harness runs — WSL2 nested virt is
+   slow. The 3-retry logic in run.sh catches this for free, but plan
+   for ~5 min per successful run, not 2 min.
+3. The exploit PoC's offsets (`ARRAY_MAP_OPS_OFF`, `POP_RBX_RET` etc.)
+   are hard-coded for kernelCTF's specific 6.6.95 bzImage — porting to
+   a self-built 6.6.95 would require regenerating kernel_defs.h.
+
+### Next (Phase 1 remaining)
+- [ ] H1 — verify `storage_cookie[]` backport completeness in 6.12 + 6.6
+- [ ] Then: arenas recon (new lane per strategy discussion)
+
+---
+
 ## 2026-04-19 (late evening) — P0-Stage-1 complete: hypothesis REFUTED
 
 **Target:** does `kprobe_multi_link_prog_run` + `session_cookies[]` have a
