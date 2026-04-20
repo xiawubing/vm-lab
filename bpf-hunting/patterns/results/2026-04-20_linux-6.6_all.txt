@@ -1,0 +1,180 @@
+
+========================================================================
+Pattern: runtime-ctx-mismatch
+CVE-2025-38502 class. Finds container_of(current->bpf_ctx, ...) where runtime context is read back. Each hit is a candidate for per-program state mismatch across tail_call.
+Regex:   container_of\s*\(\s*current->bpf_ctx
+Hits:    4 (approximate)
+========================================================================
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_lsm.c:185:	run_ctx = container_of(current->bpf_ctx, struct bpf_trace_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:1600:	ctx = container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:1622:		container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:1636:		container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
+
+
+========================================================================
+Pattern: for-each-storage-iter
+Iterator macros that fan out over all storage flavors. If a fix only addressed one flavor, siblings may be unpatched.
+Regex:   for_each_cgroup_storage_type\b
+Hits:    9 (approximate)
+========================================================================
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:219:	for_each_cgroup_storage_type(stype)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:236:	for_each_cgroup_storage_type(stype) {
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:262:	for_each_cgroup_storage_type(stype)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:272:	for_each_cgroup_storage_type(stype)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/core.c:2290:		for_each_cgroup_storage_type(i) {
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/core.c:2304:		for_each_cgroup_storage_type(i) {
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:403:	for_each_cgroup_storage_type(stype) {
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:407:			for_each_cgroup_storage_type(stype)
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:430:	for_each_cgroup_storage_type(stype)
+
+
+========================================================================
+Pattern: value-size-access
+map->value_size used as length to memcpy/memset/copy_from_user etc. Mismatches between storage allocation size and access size become OOB.
+Regex:   map->value_size\s*[,)]|->value_size\s*\)\s*(?:;|,)
+Hits:    31 (approximate)
+========================================================================
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/syscall.c:137:		return round_up(map->value_size, 8) * num_possible_cpus();
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/syscall.c:829:		   map->value_size,
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/syscall.c:1044:	if (!value_type || value_size != map->value_size)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/syscall.c:1050:				       map->value_size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cpumap.c:535:	memcpy(&cpumap_value, value, map->value_size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/map_iter.c:131:		value_size = round_up(map->value_size, 8) * num_possible_cpus();
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bloom_filter.c:43:		h = hash(bloom, value, map->value_size, i);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bloom_filter.c:61:		h = hash(bloom, value, map->value_size, i);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_struct_ops.c:270:		memset(value, 0, map->value_size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_struct_ops.c:278:	memcpy(uvalue, st_map->uvalue, map->value_size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_struct_ops.c:415:	memcpy(uvalue, value, map->value_size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_struct_ops.c:555:	memset(uvalue, 0, map->value_size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_struct_ops.c:556:	memset(kvalue, 0, map->value_size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_struct_ops.c:597:	value = kmalloc(map->value_size, GFP_USER | __GFP_NOWARN);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/local_storage.c:167:	new = bpf_map_kmalloc_node(map, struct_size(new, data, map->value_size),
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/local_storage.c:173:	memcpy(&new->data[0], value, map->value_size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/local_storage.c:201:	size = round_up(_map->value_size, 8);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/local_storage.c:235:	size = round_up(_map->value_size, 8);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/hashtab.c:1638:			u32 roundup_value_size = round_up(map->value_size, 8);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/hashtab.c:2115:				roundup_value_size = round_up(map->value_size, 8);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/hashtab.c:2155:		buf_size = round_up(map->value_size, 8) * num_possible_cpus();
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/hashtab.c:2394:	size = round_up(map->value_size, 8);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/arraymap.c:73:	/* avoid overflow on round_up(map->value_size) */
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/arraymap.c:184:	if (off >= map->value_size)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/verifier.c:5121:			map->value_size, off, size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/verifier.c:5127:			map->value_size, off, size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/verifier.c:5438:	err = check_mem_region_access(env, regno, off, size, map->value_size,
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/verifier.c:8615:		 * check [value, value + map->value_size) validity
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/verifier.c:17783:						map->value_size, off);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/devmap.c:927:	memcpy(&val, value, map->value_size);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/devmap.c:971:	memcpy(&val, value, map->value_size);
+
+
+========================================================================
+Pattern: runtime-ctx-callers
+All *_run_ctx types — each is a per-program state channel worth auditing for cross-tail_call semantics.
+Regex:   \bbpf_\w+_run_ctx\b
+Hits:    86 (approximate)
+========================================================================
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/syscall.c:5626:	struct bpf_tramp_run_ctx __maybe_unused run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_lsm.c:183:	struct bpf_trace_run_ctx *run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_lsm.c:185:	run_ctx = container_of(current->bpf_ctx, struct bpf_trace_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_iter.c:704:		old_run_ctx = bpf_set_run_ctx(&run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_iter.c:706:		bpf_reset_run_ctx(old_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_iter.c:712:		old_run_ctx = bpf_set_run_ctx(&run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/bpf_iter.c:714:		bpf_reset_run_ctx(old_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:844:static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:850:	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:883:					  struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:886:	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:895:					       struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:904:	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:910:					       struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:913:	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:920:					     struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:926:	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:936:					     struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:938:	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:947:					      struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:953:	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:959:					      struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:961:	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:969:				    struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:975:	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:981:				    struct bpf_tramp_run_ctx *run_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/trampoline.c:984:	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:57:	struct bpf_cg_run_ctx run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:65:	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:77:	bpf_reset_run_ctx(old_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:1596:	struct bpf_cg_run_ctx *ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:1600:	ctx = container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:1621:	struct bpf_cg_run_ctx *ctx =
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:1622:		container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:1635:	struct bpf_cg_run_ctx *ctx =
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:1636:		container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:2493:		BUILD_BUG_ON(offsetof(struct bpf_cg_run_ctx, run_ctx) != 0);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:2511:					       BPF_FIELD_SIZEOF(struct bpf_cg_run_ctx, retval),
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:2513:					       offsetof(struct bpf_cg_run_ctx, retval),
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:2524:			*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_cg_run_ctx, retval),
+/home/xia/vm-lab/kernel/linux-6.6/kernel/bpf/cgroup.c:2526:					      offsetof(struct bpf_cg_run_ctx, retval));
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:398:	struct bpf_cg_run_ctx run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:417:	old_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:427:	bpf_reset_run_ctx(old_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:708:	struct bpf_trace_run_ctx run_ctx = {};
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:711:	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:717:	bpf_reset_run_ctx(old_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:1067:	struct bpf_trace_run_ctx *run_ctx __maybe_unused;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:1071:	run_ctx = container_of(current->bpf_ctx, struct bpf_trace_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:1141:	struct bpf_trace_run_ctx *run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:1143:	run_ctx = container_of(current->bpf_ctx, struct bpf_trace_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:1168:	struct bpf_trace_run_ctx *run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:1170:	run_ctx = container_of(current->bpf_ctx, struct bpf_trace_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:2533:struct bpf_kprobe_multi_run_ctx {
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:2690:	struct bpf_kprobe_multi_run_ctx *run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:2697:	run_ctx = container_of(current->bpf_ctx, struct bpf_kprobe_multi_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:2712:	struct bpf_kprobe_multi_run_ctx *run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:2714:	run_ctx = container_of(current->bpf_ctx, struct bpf_kprobe_multi_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:2722:	struct bpf_kprobe_multi_run_ctx run_ctx = {
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:2742:	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:2744:	bpf_reset_run_ctx(old_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:3065:struct bpf_uprobe_multi_run_ctx {
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:3112:	struct bpf_uprobe_multi_run_ctx run_ctx = {
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:3130:	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:3132:	bpf_reset_run_ctx(old_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:3173:	struct bpf_uprobe_multi_run_ctx *run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:3175:	run_ctx = container_of(current->bpf_ctx, struct bpf_uprobe_multi_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:3181:	struct bpf_uprobe_multi_run_ctx *run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/kernel/trace/bpf_trace.c:3183:	run_ctx = container_of(current->bpf_ctx, struct bpf_uprobe_multi_run_ctx, run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1091:struct bpf_tramp_run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1119:					     struct bpf_tramp_run_ctx *run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1121:					     struct bpf_tramp_run_ctx *run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1125:				      struct bpf_tramp_run_ctx *run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1127:				      struct bpf_tramp_run_ctx *run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1929:struct bpf_cg_run_ctx {
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1935:struct bpf_trace_run_ctx {
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1941:struct bpf_tramp_run_ctx {
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1947:static inline struct bpf_run_ctx *bpf_set_run_ctx(struct bpf_run_ctx *new_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1958:static inline void bpf_reset_run_ctx(struct bpf_run_ctx *old_ctx)
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1979:	struct bpf_trace_run_ctx run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1990:	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:1997:	bpf_reset_run_ctx(old_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:2019:	struct bpf_trace_run_ctx run_ctx;
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:2032:	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/bpf.h:2045:	bpf_reset_run_ctx(old_run_ctx);
+/home/xia/vm-lab/kernel/linux-6.6/include/linux/filter.h:1368:	/* for retval in struct bpf_cg_run_ctx */
+
+
+========================================================================
+Pattern: test-run-entries
+All BPF_PROG_TEST_RUN entry points per prog_type. Each is an attacker-accessible path to trigger obscure code (38502 was reached via test_run).
+Regex:   bpf_prog_test_run_\w+\s*\(
+Hits:    11 (approximate)
+========================================================================
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:649:int bpf_prog_test_run_tracing(struct bpf_prog *prog,
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:705:__bpf_prog_test_run_raw_tp(void *data)
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:720:int bpf_prog_test_run_raw_tp(struct bpf_prog *prog,
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:756:		__bpf_prog_test_run_raw_tp(&info);
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:953:int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:1150:int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:1327:int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:1396:int bpf_prog_test_run_sk_lookup(struct bpf_prog *prog, const union bpf_attr *kattr,
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:1496:int bpf_prog_test_run_syscall(struct bpf_prog *prog,
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:1594:int bpf_prog_test_run_nf(struct bpf_prog *prog,
+/home/xia/vm-lab/kernel/linux-6.6/net/bpf/test_run.c:1706:static int __init bpf_prog_test_run_init(void)

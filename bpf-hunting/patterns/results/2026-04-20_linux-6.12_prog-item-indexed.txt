@@ -1,0 +1,7 @@
+
+========================================================================
+Pattern: prog-item-indexed-state
+Refined 38502 signature: accesses to ctx->prog_item->FIELD[...] where FIELD is sized by a user-controlled map attribute. Unlike the broader runtime-ctx-mismatch, this targets the cross-program indirection that made 38502 exploitable. run_ctxs that embed state directly (kprobe_multi, uprobe_multi, session) do NOT match.
+Regex:   ->prog_item->\w+\[
+Hits:    0 (approximate)
+========================================================================
