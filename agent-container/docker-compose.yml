@@ -18,8 +18,13 @@ services:
       - AGENT=${AGENT:-}
       - AGENT_BUDGET=${AGENT_BUDGET:-}
       - BOOT_MODE=${BOOT_MODE:-}
+      - AGENT_PROVIDER=${AGENT_PROVIDER:-claude}
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY:-}
+      - KIMI_BUDGET_USD=${KIMI_BUDGET_USD:-}
+      - TZ=America/Chicago
     volumes:
       - ../agent-logs:/workspace/logs
       - ${KERNEL_SRC_PATH:-./empty-src}:/src:ro
+      - /home/xia/ctfstructure/summaries:/app/summaries:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

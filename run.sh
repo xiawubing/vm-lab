@@ -187,6 +187,9 @@ KERNEL_SOURCE_DIR="$KERNEL_SOURCE_DIR" \
 BOOT_MODE="$BOOT_MODE" \
 KERNEL_SRC_PATH="$KERNEL_SRC_PATH" \
 AGENT="${AGENT:-}" \
+AGENT_PROVIDER="${AGENT_PROVIDER:-claude}" \
+MOONSHOT_API_KEY="${MOONSHOT_API_KEY:-}" \
+KIMI_BUDGET_USD="${KIMI_BUDGET_USD:-}" \
 docker compose up --build --force-recreate
 
 # After agent exits, show session summary

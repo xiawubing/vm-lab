@@ -35,6 +35,7 @@ usage() {
     echo "Examples:"
     echo "  $0 CVE-2023-0461_mitigation"
     echo "  $0 CVE-2023-0461_mitigation mitigation-6.1-v2"
+    echo "  EXPLOIT_SRC=/tmp/agent_output $0 CVE-2023-0461_mitigation"
     exit 1
 }
 
@@ -65,7 +66,12 @@ if [ "$RELEASE" = "mitigation-6.1" ]; then
     info "Mapped release: mitigation-6.1 → mitigation-6.1-v2"
 fi
 
-EXPLOIT_SRC="$CVE_PATH/exploit/${2:-$(ls "$CVE_PATH/exploit/" | head -1)}"
+# EXPLOIT_SRC="$CVE_PATH/exploit/${2:-$(ls "$CVE_PATH/exploit/" | head -1)}"
+if [ -z "${EXPLOIT_SRC:-}" ]; then
+    EXPLOIT_SRC="$CVE_PATH/exploit/${2:-$(ls "$CVE_PATH/exploit/" | head -1)}"
+else
+    info "Using custom exploit source: $EXPLOIT_SRC"
+fi
 RELEASE_DIR="$SCRIPT_DIR/releases/$RELEASE"
 
 # --- Pre-flight checks ---
@@ -90,12 +96,16 @@ mkdir -p "$SCRIPT_DIR/exp"
 
 # Copy all source files (*.c, *.h, *.s, *.py, Makefile, run.sh, deps, libs, etc.)
 # Exclude bzImage (large kernel) and pre-compiled exploit binary (we compile fresh)
-for f in "$EXPLOIT_SRC"/*; do
-    fname="$(basename "$f")"
-    [ "$fname" = "bzImage" ] && continue
-    [ "$fname" = "exploit" ] && continue
-    cp -a "$f" "$SCRIPT_DIR/exp/" 2>/dev/null || true
-done
+if [ -f "$EXPLOIT_SRC" ]; then
+    cp -a "$EXPLOIT_SRC" "$SCRIPT_DIR/exp/exploit.c"
+else
+    for f in "$EXPLOIT_SRC"/*; do
+        fname="$(basename "$f")"
+        [ "$fname" = "bzImage" ] && continue
+        [ "$fname" = "exploit" ] && continue
+        cp -a "$f" "$SCRIPT_DIR/exp/" 2>/dev/null || true
+    done
+fi
 
 # Create keyutils.h stub (syscall-based, no libkeyutils-dev needed)
 if [ ! -f "$SCRIPT_DIR/exp/keyutils.h" ]; then

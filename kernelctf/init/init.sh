@@ -135,11 +135,4 @@ wait $MONITOR_PID 2>/dev/null
 # run.sh will kill QEMU after detecting the flag or hitting timeout.
 # Also do a final flag check: if exploit got root and exited cleanly,
 # it may have left breadcrumbs we can detect.
-set +x
-# Final attempt: check if any process wrote the flag to stdout already
-# If not, check if /tmp/flag is now world-readable (exploit may have chmod'd it)
-if [ -f /tmp/flag ] && [ -r /tmp/flag ]; then
-    cat /tmp/flag
-    echo ""
-fi
 exec sleep 3600

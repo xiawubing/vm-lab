@@ -1,0 +1,7 @@
+
+========================================================================
+Pattern: runtime-ctx-callers
+All *_run_ctx types — each is a per-program state channel worth auditing for cross-tail_call semantics.
+Regex:   \bbpf_\w+_run_ctx\b
+Hits:    0 (approximate)
+========================================================================

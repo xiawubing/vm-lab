@@ -1,0 +1,14 @@
+
+========================================================================
+Pattern: test-run-entries
+All BPF_PROG_TEST_RUN entry points per prog_type. Each is an attacker-accessible path to trigger obscure code (38502 was reached via test_run).
+Regex:   bpf_prog_test_run_\w+\s*\(
+Hits:    7 (approximate)
+========================================================================
+/home/xia/vm-lab/kernel/linux-5.10/net/bpf/test_run.c:199:int bpf_prog_test_run_tracing(struct bpf_prog *prog,
+/home/xia/vm-lab/kernel/linux-5.10/net/bpf/test_run.c:250:__bpf_prog_test_run_raw_tp(void *data)
+/home/xia/vm-lab/kernel/linux-5.10/net/bpf/test_run.c:259:int bpf_prog_test_run_raw_tp(struct bpf_prog *prog,
+/home/xia/vm-lab/kernel/linux-5.10/net/bpf/test_run.c:298:		__bpf_prog_test_run_raw_tp(&info);
+/home/xia/vm-lab/kernel/linux-5.10/net/bpf/test_run.c:479:int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
+/home/xia/vm-lab/kernel/linux-5.10/net/bpf/test_run.c:615:int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
+/home/xia/vm-lab/kernel/linux-5.10/net/bpf/test_run.c:675:int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
